@@ -1,0 +1,3749 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>オリパ電卓</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎫</text></svg>">
+<link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@600;800&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+<style>
+  :root { color-scheme: dark; box-sizing: border-box; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; background: #12151C; margin: 0; }
+  #root { min-height: 100%; }
+</style>
+</head>
+<body>
+<div id="root">
+  <div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#8B93A3;font-family:sans-serif;font-size:13px;">
+    読み込み中...
+  </div>
+</div>
+<script>
+(function () {
+  var PREFIX = "oripa_app::";
+
+  function readAll() {
+    try {
+      var raw = window.localStorage.getItem(PREFIX + "__data");
+      return raw ? JSON.parse(raw) : {};
+    } catch (e) {
+      return {};
+    }
+  }
+  function writeAll(obj) {
+    try {
+      window.localStorage.setItem(PREFIX + "__data", JSON.stringify(obj));
+    } catch (e) {
+      /* storage full or unavailable - ignore, data just won't persist */
+    }
+  }
+
+  window.storage = {
+    get: async function (key) {
+      var all = readAll();
+      if (!Object.prototype.hasOwnProperty.call(all, key)) return null;
+      return { key: key, value: all[key], shared: false };
+    },
+    set: async function (key, value) {
+      var all = readAll();
+      all[key] = value;
+      writeAll(all);
+      return { key: key, value: value, shared: false };
+    },
+    delete: async function (key) {
+      var all = readAll();
+      delete all[key];
+      writeAll(all);
+      return { key: key, deleted: true, shared: false };
+    },
+  };
+})();
+
+</script>
+<script type="text/babel" data-presets="react,env">
+const { useState, useEffect, useMemo, useCallback } = React;
+
+function makeIcon(paths) {
+  return function Icon({ size = 16, color = "currentColor", style, className, strokeWidth = 2 }) {
+    return (
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke={color}
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        style={{ color: color, ...style }}
+        className={className}
+      >
+        {paths}
+      </svg>
+    );
+  };
+}
+
+const Settings2 = makeIcon(
+  <>
+    <line x1="4" y1="6" x2="20" y2="6" />
+    <circle cx="9" cy="6" r="2" fill="currentColor" stroke="none" />
+    <line x1="4" y1="12" x2="20" y2="12" />
+    <circle cx="15" cy="12" r="2" fill="currentColor" stroke="none" />
+    <line x1="4" y1="18" x2="20" y2="18" />
+    <circle cx="9" cy="18" r="2" fill="currentColor" stroke="none" />
+  </>
+);
+const ListPlus = makeIcon(
+  <>
+    <line x1="4" y1="6" x2="14" y2="6" />
+    <line x1="4" y1="12" x2="14" y2="12" />
+    <line x1="4" y1="18" x2="10" y2="18" />
+    <line x1="18" y1="14" x2="18" y2="20" />
+    <line x1="15" y1="17" x2="21" y2="17" />
+  </>
+);
+const Plus = makeIcon(
+  <>
+    <line x1="12" y1="5" x2="12" y2="19" />
+    <line x1="5" y1="12" x2="19" y2="12" />
+  </>
+);
+const Trash2 = makeIcon(
+  <>
+    <path d="M4 7h16" />
+    <path d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13" />
+    <path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3" />
+    <line x1="10" y1="11" x2="10" y2="17" />
+    <line x1="14" y1="11" x2="14" y2="17" />
+  </>
+);
+const X = makeIcon(
+  <>
+    <line x1="6" y1="6" x2="18" y2="18" />
+    <line x1="18" y1="6" x2="6" y2="18" />
+  </>
+);
+const TrendingUp = makeIcon(
+  <>
+    <polyline points="4,17 10,11 14,15 20,7" />
+    <polyline points="14,7 20,7 20,13" />
+  </>
+);
+const TrendingDown = makeIcon(
+  <>
+    <polyline points="4,7 10,13 14,9 20,17" />
+    <polyline points="14,17 20,17 20,11" />
+  </>
+);
+const Ticket = makeIcon(
+  <>
+    <path d="M4 8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4z" />
+    <line x1="13" y1="7" x2="13" y2="9" />
+    <line x1="13" y1="15" x2="13" y2="17" />
+  </>
+);
+const RotateCcw = makeIcon(
+  <>
+    <path d="M3 12a9 9 0 1 0 3-6.7" />
+    <polyline points="3,4 3,9 8,9" />
+  </>
+);
+const Undo2 = makeIcon(
+  <>
+    <path d="M9 14 4 9l5-5" />
+    <path d="M4 9h10a6 6 0 0 1 0 12h-3" />
+  </>
+);
+const Sparkles = makeIcon(
+  <>
+    <path d="M12 3l1.6 4.7L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.3z" fill="currentColor" stroke="none" />
+    <path d="M18 14l0.7 2 2 0.7-2 0.7-0.7 2-0.7-2-2-0.7 2-0.7z" fill="currentColor" stroke="none" />
+  </>
+);
+const Scale = makeIcon(
+  <>
+    <line x1="12" y1="3" x2="12" y2="21" />
+    <path d="M7 21h10" />
+    <path d="M5 7h14" />
+    <path d="M5 7l-3 6a3 3 0 0 0 6 0z" />
+    <path d="M19 7l3 6a3 3 0 0 1-6 0z" />
+  </>
+);
+const Crown = makeIcon(
+  <>
+    <path d="M4 18h16l-1-9-4 4-3-6-3 6-4-4z" />
+    <line x1="4" y1="20" x2="20" y2="20" />
+  </>
+);
+const ShieldCheck = makeIcon(
+  <>
+    <path d="M12 3l7 3v6c0 5-3.5 8-7 9-3.5-1-7-4-7-9V6z" />
+    <polyline points="9,12 11,14 15,10" />
+  </>
+);
+const PercentCircle = makeIcon(
+  <>
+    <circle cx="12" cy="12" r="9" />
+    <line x1="8" y1="16" x2="16" y2="8" />
+    <circle cx="8.5" cy="8.5" r="1" fill="currentColor" stroke="none" />
+    <circle cx="15.5" cy="15.5" r="1" fill="currentColor" stroke="none" />
+  </>
+);
+const Lock = makeIcon(
+  <>
+    <rect x="5" y="11" width="14" height="9" rx="2" />
+    <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+  </>
+);
+const LockOpen = makeIcon(
+  <>
+    <rect x="5" y="11" width="14" height="9" rx="2" />
+    <path d="M8 11V7a4 4 0 0 1 7.5-2" />
+  </>
+);
+const ArrowLeft = makeIcon(
+  <>
+    <line x1="19" y1="12" x2="5" y2="12" />
+    <polyline points="12,19 5,12 12,5" />
+  </>
+);
+const Store = makeIcon(
+  <>
+    <path d="M4 9l1-5h14l1 5" />
+    <path d="M4 9a2 2 0 0 0 4 0 2 2 0 0 0 4 0 2 2 0 0 0 4 0 2 2 0 0 0 4 0" />
+    <path d="M5 9v10h14V9" />
+    <path d="M10 19v-5h4v5" />
+  </>
+);
+const BarChart3 = makeIcon(
+  <>
+    <line x1="5" y1="20" x2="5" y2="10" />
+    <line x1="12" y1="20" x2="12" y2="4" />
+    <line x1="19" y1="20" x2="19" y2="14" />
+  </>
+);
+const Boxes = makeIcon(
+  <>
+    <rect x="4" y="10" width="7" height="7" />
+    <rect x="13" y="10" width="7" height="7" />
+    <rect x="8.5" y="3" width="7" height="7" />
+  </>
+);
+const ChevronRight = makeIcon(<polyline points="9,6 15,12 9,18" />);
+const Calculator = makeIcon(
+  <>
+    <rect x="4" y="2" width="16" height="20" rx="2" />
+    <rect x="7" y="5" width="10" height="3" />
+    <circle cx="8" cy="12" r="1" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
+    <circle cx="16" cy="12" r="1" fill="currentColor" stroke="none" />
+    <circle cx="8" cy="16" r="1" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="16" r="1" fill="currentColor" stroke="none" />
+    <circle cx="16" cy="16" r="1" fill="currentColor" stroke="none" />
+  </>
+);
+const Users = makeIcon(
+  <>
+    <circle cx="9" cy="8" r="3" />
+    <path d="M4 20c0-3 2.5-5 5-5s5 2 5 5" />
+    <circle cx="17" cy="9" r="2.5" />
+    <path d="M15 20c0-2.5 1.5-4 3.5-4s3.5 1.5 3.8 4" />
+  </>
+);
+const UserSearch = makeIcon(
+  <>
+    <circle cx="9" cy="8" r="3" />
+    <path d="M3 20c0-3 2.5-5 6-5s6 2 6 5" />
+    <circle cx="17" cy="15" r="3" />
+    <line x1="19.5" y1="17.5" x2="22" y2="20" />
+  </>
+);
+const CalendarCheck = makeIcon(
+  <>
+    <rect x="3" y="5" width="18" height="16" rx="2" />
+    <line x1="3" y1="10" x2="21" y2="10" />
+    <line x1="8" y1="3" x2="8" y2="7" />
+    <line x1="16" y1="3" x2="16" y2="7" />
+    <polyline points="8,15 11,18 16,12" />
+  </>
+);
+const UserPlus = makeIcon(
+  <>
+    <circle cx="9" cy="8" r="3" />
+    <path d="M3 20c0-3 2.5-5 6-5s6 2 6 5" />
+    <line x1="18" y1="8" x2="18" y2="14" />
+    <line x1="15" y1="11" x2="21" y2="11" />
+  </>
+);
+const Search = makeIcon(
+  <>
+    <circle cx="11" cy="11" r="7" />
+    <line x1="21" y1="21" x2="16.5" y2="16.5" />
+  </>
+);
+const Trophy = makeIcon(
+  <>
+    <path d="M8 4h8v5a4 4 0 0 1-8 0z" />
+    <path d="M8 5H5a3 3 0 0 0 3 5" />
+    <path d="M16 5h3a3 3 0 0 1-3 5" />
+    <line x1="12" y1="13" x2="12" y2="17" />
+    <line x1="9" y1="20" x2="15" y2="20" />
+    <line x1="9" y1="20" x2="9" y2="17" />
+    <line x1="15" y1="20" x2="15" y2="17" />
+  </>
+);
+const History = makeIcon(
+  <>
+    <path d="M3 12a9 9 0 1 0 3-6.7" />
+    <polyline points="3,4 3,9 8,9" />
+    <polyline points="12,8 12,12 15,14" />
+  </>
+);
+const ClipboardPaste = makeIcon(
+  <>
+    <rect x="6" y="4" width="12" height="16" rx="2" />
+    <rect x="9" y="2" width="6" height="4" rx="1" />
+    <line x1="9" y1="12" x2="15" y2="12" />
+    <line x1="9" y1="16" x2="13" y2="16" />
+  </>
+);
+
+
+// ---------- design tokens ----------
+const C = {
+  ink: "#12151C",
+  surface: "#1B2029",
+  surfaceAlt: "#232936",
+  surfaceAlt2: "#2A3140",
+  gold: "#E8B94B",
+  coral: "#E2694F",
+  mint: "#6FCF8F",
+  paper: "#F3F0E6",
+  muted: "#8B93A3",
+  line: "#333B4A",
+};
+
+const FONT_DISPLAY = "'Shippori Mincho', serif";
+const FONT_BODY = "'Zen Kaku Gothic New', sans-serif";
+const FONT_MONO = "'JetBrains Mono', monospace";
+
+const STORE_PASSWORD = "777";
+const MAX_ORIPA = 8;
+
+const yen = (n) => `¥${Math.round(Number(n) || 0).toLocaleString("ja-JP")}`;
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+
+const newOripa = (n) => ({
+  id: uid(),
+  name: `オリパ${n}`,
+  price: 0,
+  totalSlots: 0,
+  tiers: [],
+  lastOne: { enabled: false, name: "ラストワン賞", amount: 0 },
+  minGuarantee: { enabled: false, amount: 0, applyToAll: false, targetRate: 80 },
+});
+
+// pure calc: real-time "design dashboard" numbers while building/editing an oripa
+const RANK_KEYS = ["rainbow", "gold", "silver", "bronze", "other"];
+function computeDesignStats(oripa) {
+  const totalSlots = Number(oripa.totalSlots) || 0;
+  const price = Number(oripa.price) || 0;
+  const totalSales = totalSlots * price;
+  const targetRate = Number(oripa.minGuarantee.targetRate) || 0;
+  const targetTotal = totalSales * (targetRate / 100);
+
+  const winCount = oripa.tiers.length;
+  const hazureCount = Math.max(0, totalSlots - winCount);
+  const normalPrizeTotal = oripa.tiers.reduce((a, t) => a + (Number(t.amount) || 0), 0);
+
+  const guaranteeAmount = oripa.minGuarantee.enabled ? Number(oripa.minGuarantee.amount) || 0 : 0;
+  const guaranteeSlots = oripa.minGuarantee.enabled ? (oripa.minGuarantee.applyToAll ? totalSlots : hazureCount) : 0;
+  const guaranteeTotal = guaranteeSlots * guaranteeAmount;
+
+  const lastOneAmount = oripa.lastOne.enabled ? Number(oripa.lastOne.amount) || 0 : 0;
+
+  const currentTotal = normalPrizeTotal + guaranteeTotal + lastOneAmount;
+  const currentRate = totalSales > 0 ? (currentTotal / totalSales) * 100 : null;
+  const remaining = targetTotal - currentTotal;
+
+  const winRate = totalSlots > 0 ? (winCount / totalSlots) * 100 : null;
+  const winRatePer = winCount > 0 ? totalSlots / winCount : null;
+
+  const byRank = {};
+  RANK_KEYS.forEach((k) => (byRank[k] = { count: 0, amount: 0 }));
+  oripa.tiers.forEach((t) => {
+    const k = RANK_KEYS.includes(t.rank) ? t.rank : "other";
+    byRank[k].count += 1;
+    byRank[k].amount += Number(t.amount) || 0;
+  });
+
+  const tolerance = Math.max(price, targetTotal * 0.02, 1);
+  const complete =
+    totalSlots > 0 &&
+    price > 0 &&
+    targetRate > 0 &&
+    Math.abs(remaining) <= tolerance &&
+    winCount <= totalSlots &&
+    (!oripa.lastOne.enabled || lastOneAmount > 0);
+
+  return {
+    totalSlots,
+    price,
+    totalSales,
+    targetRate,
+    targetTotal,
+    winCount,
+    hazureCount,
+    normalPrizeTotal,
+    guaranteeAmount,
+    guaranteeSlots,
+    guaranteeTotal,
+    lastOneAmount,
+    currentTotal,
+    currentRate,
+    remaining,
+    winRate,
+    winRatePer,
+    byRank,
+    complete,
+  };
+}
+
+// ---------- seed: Box オリパ ----------
+const SEED_BOX_ORIPA_ID_OLD_LIST = ["seed-box-oripa-001", "seed-box-oripa-002", "seed-box-oripa-003", "seed-box-oripa-004", "seed-box-oripa-005"];
+const SEED_BOX_ORIPA_ID = "seed-box-oripa-006";
+function buildBoxOripaSeed() {
+  const rows = [
+    // 虹枠
+    ["ロストアビス", 54000, 1, "rainbow"],
+    ["仰天のボルテッカー", 51000, 1, "rainbow"],
+    ["151", 60000, 1, "rainbow"],
+    ["フュージョンアーツ", 55000, 1, "rainbow"],
+    ["超電ブレイカー", 33000, 1, "rainbow"],
+    ["Vユニ", 31000, 1, "rainbow"],
+    // 金枠
+    ["ブラックボルトDX", 28000, 1, "gold"],
+    ["ホワイトフレアDX", 24000, 1, "gold"],
+    ["シャイニートレジャー", 19000, 2, "gold"],
+    ["ストエメ", 17000, 5, "gold"],
+    // 銀枠
+    ["ヒロシマ", 17000, 1, "silver"],
+    ["フクオカ", 15000, 1, "silver"],
+    ["トウホク", 14000, 1, "silver"],
+    ["クリムゾンヘイズ", 14500, 3, "silver"],
+    ["メガドリーム", 14000, 9, "silver"],
+    ["ステラミラクル", 13000, 4, "silver"],
+    ["クレイバースト", 13000, 3, "silver"],
+    ["メガブレイブ", 11000, 5, "silver"],
+    ["メガシンフォニア", 10500, 5, "silver"],
+    ["バトルパートナーズ", 11000, 8, "silver"],
+    // 銅枠
+    ["ムニキス", 9500, 10, "bronze"],
+    ["アビスアイ", 9000, 10, "bronze"],
+    ["シンジュ団", 9000, 1, "bronze"],
+    ["デッキビルド＊黒炎", 5000, 1, "bronze"],
+    ["デッキビルド＊ステラミラクル", 4000, 1, "bronze"],
+    ["テラスタルリザードンデッキ", 3000, 1, "bronze"],
+    ["Nコレクション", 3000, 1, "bronze"],
+    ["リーリエコレクション", 3000, 1, "bronze"],
+    ["ダイゴデッキ", 3000, 1, "bronze"],
+    ["デオキシスデッキ", 3000, 2, "bronze"],
+    ["ニャオハデッキ", 3000, 2, "bronze"],
+  ];
+  const tiers = [];
+  rows.forEach(([name, amount, count, rank]) => {
+    for (let i = 0; i < count; i++) tiers.push({ id: uid(), name, amount, rank });
+  });
+  return {
+    id: SEED_BOX_ORIPA_ID,
+    name: "Boxオリパ",
+    price: 3000,
+    totalSlots: 500,
+    tiers,
+    lastOne: { enabled: true, name: "ロストアビス(ラストワン)", amount: 54000 },
+    minGuarantee: { enabled: true, amount: 20, applyToAll: false, targetRate: 85 },
+  };
+}
+
+// ---------- seed: 夢物語オリパ ----------
+const SEED_YUME_ORIPA_ID_OLD_LIST = ["seed-yume-oripa-001"];
+const SEED_YUME_ORIPA_ID = "seed-yume-oripa-002";
+function buildYumeOripaSeed() {
+  const rows = [
+    // 虹枠
+    ["リザードンex", 85000, 1, "rainbow"],
+    ["イーブイ", 70000, 1, "rainbow"],
+    ["ダークライ", 50000, 1, "rainbow"],
+    ["エーフィV", 52000, 1, "rainbow"],
+    // 金枠
+    ["リザードンV", 45000, 1, "gold"],
+    ["フシギバナ", 40000, 1, "gold"],
+    ["サンダー", 34000, 1, "gold"],
+    ["プテラ", 32000, 1, "gold"],
+    ["アルセウス", 28000, 1, "gold"],
+    ["ブラッキー", 31000, 1, "gold"],
+    ["メガサーナイト", 25000, 1, "gold"],
+    // 銀枠
+    ["ニドキング", 25000, 1, "silver"],
+    ["レジギガス", 22000, 1, "silver"],
+    ["Mヘルガー", 20000, 1, "silver"],
+    ["イーブイ(英語)", 20000, 1, "silver"],
+    ["ニャース", 17000, 1, "silver"],
+    ["ガラルギャロップ", 11000, 1, "silver"],
+    ["メガドリ", 13000, 1, "silver"],
+    // 銅枠
+    ["アビスアイ", 8000, 1, "bronze"],
+  ];
+  const tiers = [];
+  rows.forEach(([name, amount, count, rank]) => {
+    for (let i = 0; i < count; i++) tiers.push({ id: uid(), name, amount, rank });
+  });
+  return {
+    id: SEED_YUME_ORIPA_ID,
+    name: "夢物語オリパ",
+    price: 5000,
+    totalSlots: 200,
+    tiers,
+    lastOne: { enabled: true, name: "エーフィ(ラストワン)", amount: 85000 },
+    minGuarantee: { enabled: true, amount: 250, applyToAll: false, targetRate: 80 },
+  };
+}
+
+// ---------- seed: 1万円オリパ・スカイコレクション ----------
+const SEED_SKY_ORIPA_ID_OLD_LIST = ["seed-sky-oripa-001"];
+const SEED_SKY_ORIPA_ID = "seed-sky-oripa-002";
+function buildSkyOripaSeed() {
+  const rows = [
+    // 虹枠
+    ["メガリザ", 170000, 1, "rainbow"],
+    ["レシラム", 120000, 1, "rainbow"],
+    ["ゼクロム", 115000, 1, "rainbow"],
+    ["151リザードン", 110000, 1, "rainbow"],
+    // 金枠
+    ["ゲンガー", 86000, 1, "gold"],
+    ["カイリューMUR", 85000, 1, "gold"],
+    ["リザードンV", 72000, 1, "gold"],
+    ["ピジョット", 50000, 1, "gold"],
+    ["ホウオウ", 45000, 1, "gold"],
+    ["ラティアス", 44000, 1, "gold"],
+    // 銀枠
+    ["カイリューex", 43000, 1, "silver"],
+    ["ゲッコウガ", 42000, 1, "silver"],
+    ["セレビィ", 40000, 1, "silver"],
+    ["ファイヤー", 38000, 1, "silver"],
+    ["ミュウツー", 33000, 1, "silver"],
+    ["プテラ", 32000, 1, "silver"],
+    ["レシラム", 22000, 1, "silver"],
+    ["ゼクロム", 22000, 1, "silver"],
+    ["リザ", 20000, 1, "silver"],
+    ["インフェルノ", 20000, 5, "silver"],
+    // 銅枠
+    ["ダークライ", 16000, 1, "bronze"],
+    ["メガドリ", 14000, 10, "bronze"],
+  ];
+  const tiers = [];
+  rows.forEach(([name, amount, count, rank]) => {
+    for (let i = 0; i < count; i++) tiers.push({ id: uid(), name, amount, rank });
+  });
+  return {
+    id: SEED_SKY_ORIPA_ID,
+    name: "1万円オリパ・スカイコレクション",
+    price: 10000,
+    totalSlots: 0,
+    tiers,
+    lastOne: { enabled: true, name: "メガリザ(ラストワン)", amount: 170000 },
+    minGuarantee: { enabled: true, amount: 250, applyToAll: false, targetRate: 80 },
+  };
+}
+
+// ---------- seed: 新オリパ ----------
+const SEED_SHIN_ORIPA_ID_OLD_LIST = ["seed-shin-oripa-001"];
+const SEED_SHIN_ORIPA_ID = "seed-shin-oripa-002";
+function buildShinOripaSeed() {
+  const rows = [
+    // 虹枠
+    ["ミュウツー青", 230000, 1, "rainbow"],
+    ["ミュウツー赤", 230000, 1, "rainbow"],
+    ["グレイシア", 155000, 1, "rainbow"],
+    ["イーブイヒーローズ", 142000, 1, "rainbow"],
+    ["こくば", 128000, 1, "rainbow"],
+    ["バシャーモ", 130000, 1, "rainbow"],
+    // 金枠
+    ["カイリュー", 128000, 1, "gold"],
+    ["バンギラス", 95000, 1, "gold"],
+    ["ぴぃぷく", 90000, 1, "gold"],
+    ["ヤミラミバンギ", 95000, 1, "gold"],
+    ["いちげき", 75000, 1, "gold"],
+    ["ピカチュウサトシ", 65000, 1, "gold"],
+    ["フシギダネツタージャ", 50000, 1, "gold"],
+    ["エーフィ", 55000, 1, "gold"],
+    ["ロストアビス", 54000, 2, "gold"],
+    // 銀枠
+    ["ニンフィアV", 47000, 1, "silver"],
+    ["グレイシアV", 46000, 1, "silver"],
+    ["ブラッキーVMAX", 42000, 1, "silver"],
+    ["ブースターV", 42000, 1, "silver"],
+    ["シャワーズV", 40000, 1, "silver"],
+    ["サンダースV", 40000, 1, "silver"],
+    ["リーフィアV", 37000, 1, "silver"],
+    ["レシラム", 42000, 1, "silver"],
+    ["ゼクロム", 42000, 1, "silver"],
+    ["マシャリキ", 40000, 1, "silver"],
+    ["超電ブレイカー", 32000, 1, "silver"],
+    ["Vユニバース", 31000, 1, "silver"],
+    // 銅枠
+    ["ミュウツーVSTAR", 35000, 1, "bronze"],
+    ["ミュウツーex", 33000, 1, "bronze"],
+    ["ミミッキュVSTAR", 33000, 1, "bronze"],
+    ["プテラV", 32000, 1, "bronze"],
+    ["名探偵", 30000, 1, "bronze"],
+    ["モンジャラ", 28000, 1, "bronze"],
+    ["メタグロス", 27000, 1, "bronze"],
+    ["インフェルノ", 19000, 11, "bronze"],
+  ];
+  const tiers = [];
+  rows.forEach(([name, amount, count, rank]) => {
+    for (let i = 0; i < count; i++) tiers.push({ id: uid(), name, amount, rank });
+  });
+  return {
+    id: SEED_SHIN_ORIPA_ID,
+    name: "新オリパ",
+    price: 10000,
+    totalSlots: 250, // 通常あたり46 + ハズレ想定204 から逆算(単価は未指定)
+    tiers,
+    lastOne: { enabled: true, name: "ルギア(ラストワン)", amount: 220000 },
+    minGuarantee: { enabled: true, amount: 500, applyToAll: false, targetRate: 80 },
+  };
+}
+
+// ---------- seed: プレミアムセレクション ----------
+const SEED_PREMIUM_ORIPA_ID = "seed-premium-oripa-001";
+function buildPremiumOripaSeed() {
+  const rows = [
+    // 虹枠
+    ["メガリザXex", 170000, 1, "rainbow"],
+    ["レシラムex", 120000, 1, "rainbow"],
+    ["ゼクロムex", 115000, 1, "rainbow"],
+    ["151リザ", 100000, 1, "rainbow"],
+    ["イーブイヒーローズ", 142000, 1, "rainbow"],
+    // 金枠
+    ["バンギラスV", 95000, 1, "gold"],
+    ["ダークライGX", 80000, 1, "gold"],
+    ["いちげきウーラオス", 75000, 1, "gold"],
+    ["エーフィ", 55000, 1, "gold"],
+    ["ニンフィア", 47000, 1, "gold"],
+    ["グレイシア", 47000, 1, "gold"],
+    ["151", 58000, 1, "gold"],
+    ["ロストアビス", 55000, 1, "gold"],
+    // 銀枠
+    ["ブラッキーVMAX", 42000, 1, "silver"],
+    ["シャワーズ", 40000, 1, "silver"],
+    ["ブースター", 42000, 1, "silver"],
+    ["サンダース", 40000, 1, "silver"],
+    ["リーフィア", 35000, 1, "silver"],
+    ["プテラ", 32000, 1, "silver"],
+    ["アルセウス", 28000, 1, "silver"],
+    ["ミュウツーex", 25000, 1, "silver"],
+    ["25thレシラム", 20000, 1, "silver"],
+    ["25thゼクロム", 20000, 1, "silver"],
+    ["DXブラックボルト", 26000, 1, "silver"],
+    ["DXホワイトフレア", 24000, 1, "silver"],
+    // 銅枠
+    ["メガドリ", 13000, 8, "bronze"],
+    ["メガブレイブ", 10000, 13, "bronze"],
+  ];
+  const tiers = [];
+  rows.forEach(([name, amount, count, rank]) => {
+    for (let i = 0; i < count; i++) tiers.push({ id: uid(), name, amount, rank });
+  });
+  return {
+    id: SEED_PREMIUM_ORIPA_ID,
+    name: "プレミアムセレクション",
+    price: 10000,
+    totalSlots: 0,
+    tiers,
+    lastOne: { enabled: true, name: "カイリューV(ラストワン)", amount: 128000 },
+    minGuarantee: { enabled: true, amount: 500, applyToAll: false, targetRate: 80 },
+  };
+}
+
+// ---------- seed: 1万円オリパ(8/31〜) ----------
+const SEED_0831_ORIPA_ID = "seed-0831-oripa-001";
+function build0831OripaSeed() {
+  const rows = [
+    // 虹枠
+    ["メガリザXex", 170000, 1, "rainbow"],
+    ["レシラム", 120000, 1, "rainbow"],
+    ["ゼクロム", 120000, 1, "rainbow"],
+    ["ロケミュウ", 110000, 1, "rainbow"],
+    // 金枠
+    ["黒炎リザ", 85000, 1, "gold"],
+    ["シャイニーリザ", 80000, 1, "gold"],
+    ["メガゲンガーex", 82000, 1, "gold"],
+    ["ゲッコウガ", 60000, 1, "gold"],
+    ["メガドリピカチュウ", 62000, 1, "gold"],
+    ["151", 60000, 1, "gold"],
+    ["ロストアビス", 54000, 1, "gold"],
+    // 銀枠
+    ["レシラムex", 40000, 1, "silver"],
+    ["ゼクロムex", 40000, 1, "silver"],
+    ["メガカイリューex", 38000, 1, "silver"],
+    ["ヒビキのホウオウ", 38000, 1, "silver"],
+    ["メガゲッコウガex", 34000, 1, "silver"],
+    ["サーナイトex", 33000, 1, "silver"],
+    ["超電ブレイカー", 32000, 1, "silver"],
+    ["vゆに", 31000, 1, "silver"],
+    // 銅枠(送られた分のみ・13種類27枚。あと5種類7枚分が不足)
+    ["プテラ", 32000, 1, "bronze"],
+    ["エリカのモンジャラ", 28000, 1, "bronze"],
+    ["ロケミュウ", 25000, 1, "bronze"],
+    ["メガサーナイトex", 20000, 1, "bronze"],
+    ["ガマゲロゲ", 23000, 1, "bronze"],
+    ["ニドキング", 20000, 1, "bronze"],
+    ["メガルカリオ", 20000, 1, "bronze"],
+    ["エンブオー", 20000, 1, "bronze"],
+    ["リザードンv", 20000, 1, "bronze"],
+    ["テラスタルフェス", 20000, 1, "bronze"],
+    ["シャイニートレジャー", 19000, 1, "bronze"],
+    ["メガドリ", 14000, 8, "bronze"],
+    ["メガブレイブ", 11000, 8, "bronze"],
+  ];
+  const tiers = [];
+  rows.forEach(([name, amount, count, rank]) => {
+    for (let i = 0; i < count; i++) tiers.push({ id: uid(), name, amount, rank });
+  });
+  return {
+    id: SEED_0831_ORIPA_ID,
+    name: "1万円オリパ(8/31〜)",
+    price: 10000,
+    totalSlots: 0,
+    tiers,
+    lastOne: { enabled: true, name: "メガリザ(ラストワン)", amount: 170000 },
+    minGuarantee: { enabled: true, amount: 500, applyToAll: false, targetRate: 80 },
+  };
+}
+
+function groupTiers(tiers) {
+  const map = new Map();
+  for (const t of tiers) {
+    const key = t.name + "__" + t.amount;
+    if (!map.has(key)) map.set(key, { key, name: t.name, amount: Number(t.amount) || 0, count: 0, ids: [] });
+    const g = map.get(key);
+    g.count += 1;
+    g.ids.push(t.id);
+  }
+  return Array.from(map.values()).sort((a, b) => b.amount - a.amount);
+}
+
+// ---------- bulk text import parser ----------
+// Heuristic parser for pasted prize lists like the ones used throughout this app's setup.
+// Always returns a preview for the person to check/edit before saving - never auto-commits.
+function parseBulkOripaText(text) {
+  const lines = text.split(/\r?\n/);
+  const rankKeywords = [
+    { re: /ラスト\s*ワン|ラスワン/, rank: "lastone" },
+    { re: /虹/, rank: "rainbow" },
+    { re: /金/, rank: "gold" },
+    { re: /銀/, rank: "silver" },
+    { re: /銅/, rank: "bronze" },
+  ];
+  let currentRank = null;
+  const items = [];
+  let detectedPrice = null;
+  let detectedSlots = null;
+  let detectedGuarantee = null;
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    let m;
+    if (!detectedPrice && (m = line.match(/1口[:：]?\s*([\d,]+)\s*円/))) {
+      detectedPrice = Number(m[1].replace(/,/g, ""));
+      continue;
+    }
+    if (!detectedPrice && (m = line.match(/(\d+)\s*万円オリパ/))) {
+      detectedPrice = Number(m[1]) * 10000;
+    }
+    if (!detectedSlots && (m = line.match(/総口数[:：]?\s*(\d+)\s*口/))) {
+      detectedSlots = Number(m[1]);
+      continue;
+    }
+    if (!detectedGuarantee && (m = line.match(/(?:最低)?保証[:：]?\s*([\d,]+)\s*円/))) {
+      detectedGuarantee = Number(m[1].replace(/,/g, ""));
+      continue;
+    }
+
+    let matchedHeader = null;
+    for (const rk of rankKeywords) {
+      if (rk.re.test(line)) {
+        matchedHeader = rk.rank;
+        break;
+      }
+    }
+    const looksLikeHeader = matchedHeader && (line.length < 15 || /枠|○|🏆|🌈|🥇|🥈|🥉|⚪/.test(line)) && !/[:：]?\s*[\d,]+\.?\d*\s*万?円?\s*(?:[×xX*]\s*\d+)?\s*$/.test(line);
+    if (looksLikeHeader) {
+      currentRank = matchedHeader;
+      continue;
+    }
+
+    let itemLine = line.replace(/^[・•\-\*○◆▪]+\s*/, "");
+    let count = 1;
+    const countMatch = itemLine.match(/[×xX\*✕✖]\uFE0F?\s*(\d+)\s*個?\s*$/);
+    if (countMatch) {
+      count = Number(countMatch[1]);
+      itemLine = itemLine.slice(0, countMatch.index).trim();
+    }
+
+    let name = null;
+    let priceStr = null;
+    if (itemLine.includes("\t")) {
+      const parts = itemLine.split("\t").map((s) => s.trim()).filter(Boolean);
+      if (parts.length >= 2) {
+        name = parts[0];
+        priceStr = parts[parts.length - 1];
+      }
+    } else if (itemLine.includes("：") || itemLine.includes(":")) {
+      const idx = Math.max(itemLine.lastIndexOf("："), itemLine.lastIndexOf(":"));
+      name = itemLine.slice(0, idx).trim();
+      priceStr = itemLine.slice(idx + 1).trim();
+    } else {
+      const parts = itemLine.trim().split(/\s+/);
+      if (parts.length >= 2) {
+        priceStr = parts[parts.length - 1];
+        name = parts.slice(0, -1).join(" ");
+      } else {
+        // no separator at all, e.g. "メガドリ1.4万" or "メガドリ1.4" - split at the trailing price-looking chunk
+        const m = itemLine.match(/^(.*?)([\d,]+\.?\d*\s*(?:万円|万|円)?)\s*$/);
+        if (m && m[1].trim() && m[2].trim()) {
+          name = m[1].trim();
+          priceStr = m[2].trim();
+        }
+      }
+    }
+    if (!name || !priceStr) continue;
+
+    let amount = null;
+    const manMatch = priceStr.match(/([\d,]+\.?\d*)\s*万/);
+    const yenMatch = priceStr.match(/([\d,]+)\s*円/);
+    const plainMatch = priceStr.match(/([\d,]+\.?\d*)/);
+    if (manMatch) amount = Math.round(parseFloat(manMatch[1].replace(/,/g, "")) * 10000);
+    else if (yenMatch) amount = Number(yenMatch[1].replace(/,/g, ""));
+    else if (plainMatch) {
+      const v = parseFloat(plainMatch[1].replace(/,/g, ""));
+      amount = v < 1000 ? Math.round(v * 10000) : Math.round(v);
+    }
+    if (amount == null || isNaN(amount) || !name) continue;
+
+    items.push({ id: uid(), name, amount, count, rank: currentRank && currentRank !== "lastone" ? currentRank : null, isLastOne: currentRank === "lastone" });
+  }
+
+  return { items, detectedPrice, detectedSlots, detectedGuarantee };
+}
+
+// pure calc: totals for a slice of log entries (used for customer session AND store all-time totals)
+// guaranteeAmount: the per-card minimum guarantee payout for this oripa (0 if disabled)
+function computeTotals(logSlice, guaranteeAmount = 0) {
+  const draws = logSlice.filter((e) => e.type === "draw");
+  const wins = logSlice.filter((e) => e.type === "win");
+  const totalSpent = draws.reduce((a, e) => a + e.cost, 0);
+  const totalWinAmount = wins.reduce((a, e) => a + e.amount, 0);
+
+  // every draw that isn't a named win is assumed to be a "hazure" card, and by default
+  // everyone trades it in for the guaranteed amount - unless marked otherwise below.
+  const hazureTotalCount = Math.max(0, draws.length - wins.length);
+  const adjustments = logSlice.filter((e) => e.type === "hazureNotRedeemed");
+  const lastAdjustment = adjustments.length ? adjustments[adjustments.length - 1] : null;
+  const hazureNotRedeemedCount = lastAdjustment ? Math.min(hazureTotalCount, Math.max(0, Number(lastAdjustment.count) || 0)) : 0;
+  const hazureRedeemedCount = Math.max(0, hazureTotalCount - hazureNotRedeemedCount);
+  const totalHazureAmount = hazureRedeemedCount * guaranteeAmount;
+
+  const totalPayout = totalWinAmount + totalHazureAmount;
+  return {
+    drawCount: draws.length,
+    winCount: wins.length,
+    hazureTotalCount,
+    hazureNotRedeemedCount,
+    hazureRedeemedCount,
+    totalSpent,
+    totalWinAmount,
+    totalHazureAmount,
+    totalPayout,
+    diff: totalPayout - totalSpent, // customer-facing profit/loss
+    shopProfit: totalSpent - totalPayout, // store-facing profit
+    recoveryRate: totalSpent > 0 ? (totalPayout / totalSpent) * 100 : null, // 回収率
+  };
+}
+
+// pure calc: shared physical box state (always full log, never customer-scoped)
+function computeBoxState(fullLog, oripa) {
+  const consumedTierIds = new Set(fullLog.filter((e) => e.type === "win" && e.tierId).map((e) => e.tierId));
+  const remainingTiers = oripa.tiers.filter((t) => !consumedTierIds.has(t.id));
+  const totalSlots = Number(oripa.totalSlots) || 0;
+  const drawCountAll = fullLog.filter((e) => e.type === "draw").length;
+  const remainingSlots = Math.max(0, totalSlots - drawCountAll);
+  const lastOneAwarded = fullLog.some((e) => e.isLastOne);
+  const remainingPrizeAmount = remainingTiers.reduce((a, t) => a + Number(t.amount || 0), 0);
+  const lastOneRemainingValue = oripa.lastOne.enabled && !lastOneAwarded && totalSlots > 0 ? Number(oripa.lastOne.amount) || 0 : 0;
+  const insertionRate = remainingSlots > 0 ? (remainingPrizeAmount + lastOneRemainingValue) / remainingSlots : null;
+  const remainingHazureCount = Math.max(0, remainingSlots - remainingTiers.length);
+  const remainingCost = remainingSlots * (Number(oripa.price) || 0);
+  const configuredRate = totalSlots ? (oripa.tiers.length / totalSlots) * 100 : null;
+  return {
+    consumedTierIds,
+    remainingTiers,
+    remainingSlots,
+    lastOneAwarded,
+    remainingPrizeAmount,
+    lastOneRemainingValue,
+    insertionRate,
+    remainingHazureCount,
+    remainingCost,
+    drawCountAll,
+    configuredRate,
+  };
+}
+
+// ---------- date helpers ----------
+function dateKeyOf(ts) {
+  const d = new Date(ts);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function todayKey() {
+  return dateKeyOf(Date.now());
+}
+function monthKeyOf(dateKey) {
+  return dateKey.slice(0, 7);
+}
+
+// ---------- daily store aggregation (across all oripa, all customers) ----------
+function computeDailyStats(dateKey, oripaList, logsById, sessions) {
+  const byOripa = [];
+  let totalSales = 0,
+    totalSlots = 0,
+    totalPayout = 0;
+
+  oripaList.forEach((o) => {
+    const log = logsById[o.id] || [];
+    const dayLog = log.filter((e) => dateKeyOf(e.ts) === dateKey);
+    const guaranteeAmount = o.minGuarantee.enabled ? Number(o.minGuarantee.amount) || 0 : 0;
+    const totals = computeTotals(dayLog, guaranteeAmount);
+    if (totals.drawCount > 0 || totals.totalPayout > 0) {
+      byOripa.push({ oripaId: o.id, name: o.name, sales: totals.totalSpent, slots: totals.drawCount, payout: totals.totalPayout });
+    }
+    totalSales += totals.totalSpent;
+    totalSlots += totals.drawCount;
+    totalPayout += totals.totalPayout;
+  });
+
+  const visitorCount = sessions.filter((s) => dateKeyOf(s.startTs) === dateKey).length;
+  const grossProfit = totalSales - totalPayout;
+  const actualRate = totalSales > 0 ? (totalPayout / totalSales) * 100 : null;
+
+  return { dateKey, totalSales, totalSlots, totalPayout, grossProfit, actualRate, visitorCount, byOripa };
+}
+
+// ---------- customer lifetime aggregation ----------
+function computeCustomerLifetime(customer, sessions, oripaList, logsById) {
+  const mySessions = sessions.filter((s) => s.customerId === customer.id);
+  const oripaById = {};
+  oripaList.forEach((o) => (oripaById[o.id] = o));
+
+  let totalSpent = 0,
+    totalPayout = 0;
+  let bestDiff = null,
+    worstDiff = null;
+  const history = [];
+
+  mySessions
+    .slice()
+    .sort((a, b) => b.startTs - a.startTs)
+    .forEach((s) => {
+      const oripa = oripaById[s.oripaId];
+      const log = (logsById[s.oripaId] || []).filter((e) => e.sessionId === s.id);
+      const guaranteeAmount = oripa && oripa.minGuarantee.enabled ? Number(oripa.minGuarantee.amount) || 0 : 0;
+      const totals = computeTotals(log, guaranteeAmount);
+      totalSpent += totals.totalSpent;
+      totalPayout += totals.totalPayout;
+      if (bestDiff === null || totals.diff > bestDiff) bestDiff = totals.diff;
+      if (worstDiff === null || totals.diff < worstDiff) worstDiff = totals.diff;
+      history.push({ session: s, oripaName: s.oripaName, totals });
+    });
+
+  return {
+    totalSpent,
+    totalPayout,
+    diff: totalPayout - totalSpent,
+    recoveryRate: totalSpent > 0 ? (totalPayout / totalSpent) * 100 : null,
+    visitCount: mySessions.length,
+    totalSlots: history.reduce((a, h) => a + h.totals.drawCount, 0),
+    bestDiff,
+    worstDiff,
+    history,
+  };
+}
+
+function remainingRateRows(remainingTiers, remainingSlots, oripa, lastOneAwarded) {
+  const rows = groupTiers(remainingTiers).map((g) => ({
+    ...g,
+    countLabel: remainingSlots ? `${g.count}/${remainingSlots}` : `${g.count}口`,
+  }));
+  if (oripa.lastOne.enabled && !lastOneAwarded && Number(oripa.totalSlots) > 0) {
+    rows.push({
+      name: oripa.lastOne.name || "ラストワン賞",
+      amount: oripa.lastOne.amount,
+      count: 1,
+      countLabel: remainingSlots ? `1/${remainingSlots}` : "1口",
+      special: "lastone",
+    });
+  }
+  const remHazure = Math.max(0, remainingSlots - remainingTiers.length);
+  rows.push({
+    name: "はずれ(最低保証)",
+    amount: oripa.minGuarantee.enabled ? oripa.minGuarantee.amount : 0,
+    count: remHazure,
+    countLabel: remainingSlots ? `${remHazure}/${remainingSlots}` : `${remHazure}口`,
+    special: "hazure",
+  });
+  return rows;
+}
+
+function configuredRateRows(oripa) {
+  const totalSlots = Number(oripa.totalSlots) || 0;
+  const rows = groupTiers(oripa.tiers).map((g) => ({
+    ...g,
+    countLabel: totalSlots ? `${g.count}/${totalSlots}` : `${g.count}口`,
+  }));
+  if (oripa.lastOne.enabled) {
+    rows.push({
+      name: oripa.lastOne.name || "ラストワン賞",
+      amount: oripa.lastOne.amount,
+      count: 1,
+      countLabel: totalSlots ? `1/${totalSlots}` : "1口",
+      special: "lastone",
+    });
+  }
+  const hazureCount = Math.max(0, totalSlots - oripa.tiers.length);
+  rows.push({
+    name: "はずれ(最低保証)",
+    amount: oripa.minGuarantee.enabled ? oripa.minGuarantee.amount : 0,
+    count: hazureCount,
+    countLabel: totalSlots ? `${hazureCount}/${totalSlots}` : `${hazureCount}口`,
+    special: "hazure",
+  });
+  return rows;
+}
+
+// ---------- probability / EV helpers ----------
+const RANK_LABEL = { rainbow: "虹", gold: "金", silver: "銀", bronze: "銅", other: "他" };
+const RANK_ORDER = ["rainbow", "gold", "silver", "bronze"];
+
+// exact P(at least one of a category of size K appears in N draws from a pool of R), no replacement
+function probAtLeastOne(R, K, N) {
+  if (K <= 0 || N <= 0 || R <= 0) return 0;
+  const n = Math.min(N, R);
+  if (n > R - K) return 1;
+  let p = 1;
+  for (let i = 0; i < n; i++) p *= (R - K - i) / (R - i);
+  return 1 - p;
+}
+
+// Monte Carlo: probability that buying N of the remaining slots nets a profit (payout > cost)
+function simulateProfitProbability(remainingTiers, remainingHazureCount, hazureAmount, lastOneRemainingValue, N, price, trials = 2500) {
+  const pool = remainingTiers.map((t) => Number(t.amount) || 0);
+  for (let i = 0; i < remainingHazureCount; i++) pool.push(hazureAmount);
+  const R = pool.length;
+  const n = Math.min(N, R);
+  if (R === 0 || n === 0) return 0;
+  const cost = n * price;
+  let profitCount = 0;
+  for (let t = 0; t < trials; t++) {
+    const idx = Array.from({ length: R }, (_, i) => i);
+    let sum = 0;
+    let lastSlotSelected = false;
+    const lastSlotPos = lastOneRemainingValue > 0 ? Math.floor(Math.random() * R) : -1;
+    for (let i = 0; i < n; i++) {
+      const j = i + Math.floor(Math.random() * (R - i));
+      [idx[i], idx[j]] = [idx[j], idx[i]];
+      sum += pool[idx[i]];
+      if (idx[i] === lastSlotPos) lastSlotSelected = true;
+    }
+    if (lastSlotSelected) sum += lastOneRemainingValue;
+    if (sum > cost) profitCount++;
+  }
+  return profitCount / trials;
+}
+
+// ---------- small UI atoms ----------
+function StatBlock({ label, value, color, mono = true }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs tracking-wide" style={{ color: C.muted, fontFamily: FONT_BODY }}>
+        {label}
+      </span>
+      <span
+        className="text-lg leading-none"
+        style={{ color: color || C.paper, fontFamily: mono ? FONT_MONO : FONT_BODY, fontWeight: 700 }}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function Toggle({ checked, onChange }) {
+  return (
+    <button
+      onClick={() => onChange(!checked)}
+      className="press"
+      style={{
+        width: 42,
+        height: 24,
+        borderRadius: 12,
+        background: checked ? C.gold : C.surfaceAlt2,
+        border: `1px solid ${C.line}`,
+        position: "relative",
+        flexShrink: 0,
+      }}
+    >
+      <span
+        style={{
+          position: "absolute",
+          top: 1,
+          left: checked ? 19 : 1,
+          width: 20,
+          height: 20,
+          borderRadius: "50%",
+          background: checked ? C.ink : C.muted,
+          transition: "left .15s ease",
+        }}
+      />
+    </button>
+  );
+}
+
+function RateTable({ rows }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="grid gap-2 px-1" style={{ gridTemplateColumns: "1.6fr 0.9fr 1fr", fontSize: 10, color: C.muted }}>
+        <span>名前</span>
+        <span className="text-right">封入率</span>
+        <span className="text-right">金額</span>
+      </div>
+      {rows.map((r, i) => (
+        <div
+          key={i}
+          className="grid items-center gap-2 rounded-lg px-3 py-2"
+          style={{ gridTemplateColumns: "1.6fr 0.9fr 1fr", background: C.surfaceAlt, border: `1px solid ${C.line}` }}
+        >
+          <div className="flex items-center gap-1.5 min-w-0">
+            {r.special === "lastone" && <Crown size={12} color={C.gold} />}
+            {r.special === "hazure" && <ShieldCheck size={12} color={C.muted} />}
+            <span
+              style={{
+                fontSize: 12,
+                color: r.special === "hazure" ? C.muted : C.paper,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {r.name}
+              {r.count > 1 ? ` ×${r.count}` : ""}
+            </span>
+          </div>
+          <span className="text-right" style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.paper }}>
+            {r.countLabel}
+          </span>
+          <span
+            className="text-right"
+            style={{ fontFamily: FONT_MONO, fontSize: 12, fontWeight: 700, color: r.special === "hazure" ? C.muted : C.gold }}
+          >
+            {yen(r.amount)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const inputStyle = {
+  background: C.surfaceAlt,
+  border: `1px solid ${C.line}`,
+  color: C.paper,
+  borderRadius: 10,
+  padding: "10px 12px",
+  width: "100%",
+  fontFamily: FONT_MONO,
+  fontSize: 15,
+};
+const labelStyle = { fontSize: 12, color: C.muted, marginBottom: 6, display: "block" };
+
+// ==================================================================
+function OripaCalculator() {
+  const [loaded, setLoaded] = useState(false);
+  const [navTab, setNavTab] = useState("active"); // 'active' | 'store'
+
+  const [oripaList, setOripaList] = useState([]);
+  const [logsById, setLogsById] = useState({});
+  const [sessionStarts, setSessionStarts] = useState({});
+
+  const [activeOripaId, setActiveOripaId] = useState(null);
+  const [customerSubTab, setCustomerSubTab] = useState("record");
+  const [stamp, setStamp] = useState(null);
+
+  const [storeUnlocked, setStoreUnlocked] = useState(false);
+  const [storeSubTab, setStoreSubTab] = useState("aggregate");
+
+  const [customers, setCustomers] = useState([]);
+  const [sessions, setSessions] = useState([]);
+  const [settlements, setSettlements] = useState([]);
+
+  // ---- initial load ----
+  useEffect(() => {
+    (async () => {
+      let list = [];
+      try {
+        const r = await window.storage.get("oripa:list", true);
+        if (r && r.value) list = JSON.parse(r.value);
+      } catch (e) {}
+
+      // one-time wipe: clear out all demo/seeded oripa so we start from a clean slate.
+      // this only runs once (guarded by the oripa:wipedV1 flag) so it never touches
+      // oripa created after this point.
+      let alreadyWiped = false;
+      try {
+        const r = await window.storage.get("oripa:wipedV1", true);
+        alreadyWiped = !!(r && r.value);
+      } catch (e) {}
+
+      if (!alreadyWiped) {
+        for (const o of list) {
+          window.storage.delete(`oripa:log:${o.id}`, true).catch(() => {});
+        }
+        list = [];
+        window.storage.set("oripa:list", JSON.stringify(list), true).catch(() => {});
+        window.storage.set("oripa:wipedV1", "true", true).catch(() => {});
+      }
+
+      setOripaList(list);
+      try {
+        const r = await window.storage.get("oripa:sessionStarts", true);
+        if (r && r.value) setSessionStarts(JSON.parse(r.value));
+      } catch (e) {}
+      try {
+        const r = await window.storage.get("oripa:customers", true);
+        if (r && r.value) setCustomers(JSON.parse(r.value));
+      } catch (e) {}
+      try {
+        const r = await window.storage.get("oripa:sessions", true);
+        if (r && r.value) setSessions(JSON.parse(r.value));
+      } catch (e) {}
+      try {
+        const r = await window.storage.get("oripa:settlements", true);
+        if (r && r.value) setSettlements(JSON.parse(r.value));
+      } catch (e) {}
+      setLoaded(true);
+    })();
+  }, []);
+
+  const fetchLog = useCallback(async (id) => {
+    try {
+      const r = await window.storage.get(`oripa:log:${id}`, true);
+      return r && r.value ? JSON.parse(r.value) : [];
+    } catch (e) {
+      return [];
+    }
+  }, []);
+
+  const ensureLogLoaded = useCallback(
+    async (id) => {
+      if (logsById[id] !== undefined) return;
+      const log = await fetchLog(id);
+      setLogsById((prev) => ({ ...prev, [id]: log }));
+    },
+    [logsById, fetchLog]
+  );
+
+  // load log for the active customer oripa
+  useEffect(() => {
+    if (activeOripaId) ensureLogLoaded(activeOripaId);
+  }, [activeOripaId, ensureLogLoaded]);
+
+  // live sync: several customers may draw the same oripa together on different phones
+  useEffect(() => {
+    if (!activeOripaId) return;
+    const poll = async () => {
+      try {
+        const [logRes, sessRes] = await Promise.all([
+          window.storage.get(`oripa:log:${activeOripaId}`, true),
+          window.storage.get("oripa:sessionStarts", true),
+        ]);
+        if (logRes) setLogsById((prev) => ({ ...prev, [activeOripaId]: logRes.value ? JSON.parse(logRes.value) : [] }));
+        if (sessRes && sessRes.value) setSessionStarts(JSON.parse(sessRes.value));
+      } catch (e) {}
+    };
+    const interval = setInterval(poll, 4000);
+    return () => clearInterval(interval);
+  }, [activeOripaId]);
+
+  // load all logs for the oripa list and for store-wide / active-customer views
+  useEffect(() => {
+    const storeNeedsAllLogs = ["aggregate", "customers", "daily"].includes(storeSubTab);
+    if (navTab === "active" || (navTab === "store" && storeUnlocked && storeNeedsAllLogs)) {
+      oripaList.forEach((o) => ensureLogLoaded(o.id));
+    }
+  }, [navTab, activeOripaId, storeUnlocked, storeSubTab, oripaList, ensureLogLoaded]);
+
+  const saveOripaList = (list) => {
+    setOripaList(list);
+    window.storage.set("oripa:list", JSON.stringify(list), true).catch(() => {});
+  };
+  const saveSessionStarts = (obj) => {
+    setSessionStarts(obj);
+    window.storage.set("oripa:sessionStarts", JSON.stringify(obj), true).catch(() => {});
+  };
+  const appendLog = (id, entries) => {
+    const newLog = [...(logsById[id] || []), ...entries];
+    setLogsById((prev) => ({ ...prev, [id]: newLog }));
+    window.storage.set(`oripa:log:${id}`, JSON.stringify(newLog), true).catch(() => {});
+  };
+  const deleteLogEntry = (id, entryId) => {
+    const newLog = (logsById[id] || []).filter((e) => e.id !== entryId);
+    setLogsById((prev) => ({ ...prev, [id]: newLog }));
+    window.storage.set(`oripa:log:${id}`, JSON.stringify(newLog), true).catch(() => {});
+  };
+  const clearLog = (id) => {
+    setLogsById((prev) => ({ ...prev, [id]: [] }));
+    window.storage.set(`oripa:log:${id}`, JSON.stringify([]), true).catch(() => {});
+  };
+
+  const fireStamp = (type) => {
+    setStamp(type);
+    setTimeout(() => setStamp(null), 1100);
+  };
+
+  const recordDraw = (oripa) => {
+    const fullLog = logsById[oripa.id] || [];
+    const currentDraws = fullLog.filter((e) => e.type === "draw").length;
+    const totalSlots = Number(oripa.totalSlots) || 0;
+    if (totalSlots > 0 && currentDraws >= totalSlots) return; // sold out
+    const newDraws = currentDraws + 1;
+    const lastOneAwarded = fullLog.some((e) => e.isLastOne);
+    const entries = [{ id: uid(), type: "draw", ts: Date.now(), cost: Number(oripa.price) || 0 }];
+    let awardLastOne = false;
+    if (oripa.lastOne.enabled && totalSlots > 0 && newDraws === totalSlots && !lastOneAwarded) {
+      entries.push({
+        id: uid(),
+        type: "win",
+        ts: Date.now() + 1,
+        name: oripa.lastOne.name || "ラストワン賞",
+        amount: Number(oripa.lastOne.amount) || 0,
+        isLastOne: true,
+      });
+      awardLastOne = true;
+    }
+    appendLog(oripa.id, entries);
+    if (awardLastOne) fireStamp("lastone");
+  };
+  const recordWin = (oripa, tier) => {
+    appendLog(oripa.id, [{ id: uid(), type: "win", ts: Date.now(), name: tier.name, amount: Number(tier.amount) || 0, tierId: tier.id }]);
+    fireStamp("win");
+  };
+  const setHazureNotRedeemed = (oripa, count) => {
+    appendLog(oripa.id, [{ id: uid(), type: "hazureNotRedeemed", ts: Date.now(), count: Number(count) || 0 }]);
+  };
+  const undoLast = (id) => {
+    const fullLog = logsById[id] || [];
+    if (!fullLog.length) return;
+    const newLog = fullLog.slice(0, -1);
+    setLogsById((prev) => ({ ...prev, [id]: newLog }));
+    window.storage.set(`oripa:log:${id}`, JSON.stringify(newLog), true).catch(() => {});
+  };
+  const nextCustomer = (id) => {
+    saveSessionStarts({ ...sessionStarts, [id]: Date.now() });
+  };
+
+  // ---- oripa list management ----
+  const addOripa = () => {
+    if (oripaList.length >= MAX_ORIPA) return;
+    const o = newOripa(oripaList.length + 1);
+    saveOripaList([...oripaList, o]);
+    setLogsById((prev) => ({ ...prev, [o.id]: [] }));
+    window.storage.set(`oripa:log:${o.id}`, JSON.stringify([]), true).catch(() => {});
+  };
+  const updateOripa = (id, updater) => {
+    saveOripaList(oripaList.map((o) => (o.id === id ? updater(o) : o)));
+  };
+  const deleteOripa = (id) => {
+    saveOripaList(oripaList.filter((o) => o.id !== id));
+    window.storage.delete(`oripa:log:${id}`, true).catch(() => {});
+    if (activeOripaId === id) setActiveOripaId(null);
+  };
+
+  const activeOripa = oripaList.find((o) => o.id === activeOripaId) || null;
+
+  // ---- 営業中のお客様管理 (staff-operated concurrent customer tracking) ----
+  const saveCustomers = (list) => {
+    setCustomers(list);
+    window.storage.set("oripa:customers", JSON.stringify(list), true).catch(() => {});
+  };
+  const saveSessions = (list) => {
+    setSessions(list);
+    window.storage.set("oripa:sessions", JSON.stringify(list), true).catch(() => {});
+  };
+  const saveSettlements = (list) => {
+    setSettlements(list);
+    window.storage.set("oripa:settlements", JSON.stringify(list), true).catch(() => {});
+  };
+
+  const startSession = (customerName, oripaId, paymentMethod) => {
+    const trimmed = (customerName || "").trim();
+    if (!trimmed || !oripaId) return;
+    const oripa = oripaList.find((o) => o.id === oripaId);
+    if (!oripa) return;
+    const now = Date.now();
+    let customer = customers.find((c) => c.name === trimmed);
+    let newCustomers;
+    if (customer) {
+      customer = { ...customer, lastVisitTs: now, visitCount: (customer.visitCount || 0) + 1 };
+      newCustomers = customers.map((c) => (c.id === customer.id ? customer : c));
+    } else {
+      customer = { id: uid(), name: trimmed, firstVisitTs: now, lastVisitTs: now, visitCount: 1 };
+      newCustomers = [...customers, customer];
+    }
+    saveCustomers(newCustomers);
+    const session = {
+      id: uid(),
+      customerId: customer.id,
+      customerName: customer.name,
+      oripaId: oripa.id,
+      oripaName: oripa.name,
+      paymentMethod: paymentMethod || "cash",
+      startTs: now,
+      endTs: null,
+    };
+    saveSessions([...sessions, session]);
+    ensureLogLoaded(oripa.id);
+  };
+  const endSession = (sessionId) => {
+    saveSessions(sessions.map((s) => (s.id === sessionId ? { ...s, endTs: Date.now() } : s)));
+  };
+  const reopenSession = (sessionId) => {
+    saveSessions(sessions.map((s) => (s.id === sessionId ? { ...s, endTs: null } : s)));
+  };
+
+  const recordSessionDraw = (session) => {
+    const oripa = oripaList.find((o) => o.id === session.oripaId);
+    if (!oripa) return;
+    const fullLog = logsById[oripa.id] || [];
+    const currentDraws = fullLog.filter((e) => e.type === "draw").length;
+    const totalSlots = Number(oripa.totalSlots) || 0;
+    if (totalSlots > 0 && currentDraws >= totalSlots) return; // sold out
+    const newDraws = currentDraws + 1;
+    const lastOneAwarded = fullLog.some((e) => e.isLastOne);
+    const entries = [{ id: uid(), type: "draw", ts: Date.now(), cost: Number(oripa.price) || 0, sessionId: session.id }];
+    let awardLastOne = false;
+    if (oripa.lastOne.enabled && totalSlots > 0 && newDraws === totalSlots && !lastOneAwarded) {
+      entries.push({
+        id: uid(),
+        type: "win",
+        ts: Date.now() + 1,
+        name: oripa.lastOne.name || "ラストワン賞",
+        amount: Number(oripa.lastOne.amount) || 0,
+        isLastOne: true,
+        sessionId: session.id,
+      });
+      awardLastOne = true;
+    }
+    appendLog(oripa.id, entries);
+    if (awardLastOne) fireStamp("lastone");
+  };
+  const recordSessionWin = (session, tier) => {
+    appendLog(session.oripaId, [
+      { id: uid(), type: "win", ts: Date.now(), name: tier.name, amount: Number(tier.amount) || 0, tierId: tier.id, sessionId: session.id },
+    ]);
+    fireStamp("win");
+  };
+  const setSessionHazureNotRedeemed = (session, count) => {
+    appendLog(session.oripaId, [{ id: uid(), type: "hazureNotRedeemed", ts: Date.now(), count: Number(count) || 0, sessionId: session.id }]);
+  };
+  const undoLastSessionEntry = (session) => {
+    const fullLog = logsById[session.oripaId] || [];
+    const sessionEntries = fullLog.filter((e) => e.sessionId === session.id);
+    if (!sessionEntries.length) return;
+    const last = sessionEntries[sessionEntries.length - 1];
+    const newLog = fullLog.filter((e) => e.id !== last.id);
+    setLogsById((prev) => ({ ...prev, [session.oripaId]: newLog }));
+    window.storage.set(`oripa:log:${session.oripaId}`, JSON.stringify(newLog), true).catch(() => {});
+  };
+
+  const settleToday = () => {
+    const key = todayKey();
+    if (settlements.some((s) => s.dateKey === key)) return;
+    const stats = computeDailyStats(key, oripaList, logsById, sessions);
+    saveSettlements([...settlements, { id: uid(), ...stats, settledAt: Date.now(), edited: false }]);
+  };
+  const updateSettlement = (id, updater) => {
+    saveSettlements(settlements.map((s) => (s.id === id ? { ...updater(s), edited: true, editedAt: Date.now() } : s)));
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col" style={{ background: C.ink, color: C.paper, fontFamily: FONT_BODY }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@600;800&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=JetBrains+Mono:wght@500;700&display=swap');
+        * { box-sizing: border-box; }
+        @keyframes stampPop {
+          0% { transform: scale(2.2) rotate(-14deg); opacity: 0; }
+          55% { transform: scale(0.92) rotate(-10deg); opacity: 1; }
+          100% { transform: scale(1) rotate(-10deg); opacity: 1; }
+        }
+        @keyframes stampFade { 0%, 65% { opacity: 1; } 100% { opacity: 0; } }
+        .stamp-wrap { animation: stampPop 0.32s ease-out, stampFade 1.1s ease-in forwards; }
+        .tab-btn { transition: color .15s ease; }
+        .press { transition: transform .08s ease; }
+        .press:active { transform: scale(0.96); }
+        ::-webkit-scrollbar { width: 0px; }
+      `}</style>
+
+      {/* header */}
+      <div className="flex items-center gap-2 px-5 pt-6 pb-4" style={{ borderBottom: `1px solid ${C.line}` }}>
+        <Ticket size={22} color={C.gold} />
+        <div>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 20, letterSpacing: 1 }}>オリパ電卓</div>
+          <div style={{ fontSize: 11, color: C.muted, letterSpacing: 2 }}>ORIPA LEDGER</div>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-5 pb-28 pt-4 max-w-md w-full mx-auto">
+        {navTab === "active" && (
+          <ActiveCustomers
+            oripaList={oripaList}
+            logsById={logsById}
+            sessions={sessions}
+            customers={customers}
+            startSession={startSession}
+            endSession={endSession}
+            reopenSession={reopenSession}
+            recordSessionDraw={recordSessionDraw}
+            recordSessionWin={recordSessionWin}
+            setSessionHazureNotRedeemed={setSessionHazureNotRedeemed}
+            undoLastSessionEntry={undoLastSessionEntry}
+          />
+        )}
+
+        {navTab === "store" &&
+          (storeUnlocked ? (
+            <StoreShell
+              storeSubTab={storeSubTab}
+              setStoreSubTab={setStoreSubTab}
+              onLock={() => setStoreUnlocked(false)}
+              oripaList={oripaList}
+              logsById={logsById}
+              addOripa={addOripa}
+              updateOripa={updateOripa}
+              deleteOripa={deleteOripa}
+              clearLog={clearLog}
+              customers={customers}
+              sessions={sessions}
+              settlements={settlements}
+              settleToday={settleToday}
+              updateSettlement={updateSettlement}
+              stamp={stamp}
+            />
+          ) : (
+            <PasswordGate onUnlock={() => setStoreUnlocked(true)} />
+          ))}
+      </div>
+
+      {/* bottom nav */}
+      <div className="fixed bottom-0 left-0 right-0 flex justify-around items-stretch py-2" style={{ background: C.surface, borderTop: `1px solid ${C.line}` }}>
+        <div className="max-w-md w-full mx-auto flex justify-around">
+          <NavBtn icon={Users} label="営業中" active={navTab === "active"} onClick={() => setNavTab("active")} />
+          <NavBtn icon={storeUnlocked ? LockOpen : Lock} label="店舗" active={navTab === "store"} onClick={() => setNavTab("store")} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NavBtn({ icon: Icon, label, active, onClick }) {
+  return (
+    <button onClick={onClick} className="tab-btn flex flex-col items-center gap-1 py-1 px-6">
+      <Icon size={20} color={active ? C.gold : C.muted} />
+      <span style={{ fontSize: 11, color: active ? C.gold : C.muted, fontWeight: active ? 700 : 500 }}>{label}</span>
+    </button>
+  );
+}
+
+// ==================================================================
+// CUSTOMER: oripa selector
+// ==================================================================
+function OripaSelector({ oripaList, logsById, onSelect }) {
+  if (oripaList.length === 0) {
+    return (
+      <div className="rounded-xl px-5 py-10 text-center" style={{ background: C.surface, border: `1px dashed ${C.line}`, color: C.muted }}>
+        <Boxes size={28} className="mx-auto mb-3" color={C.muted} />
+        <div style={{ fontSize: 13 }}>まだオリパが登録されていません</div>
+        <div style={{ fontSize: 11, marginTop: 4 }}>店舗タブ(パスワード)から追加してください</div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      <div style={{ fontSize: 12, color: C.muted, padding: "0 4px" }}>引きたいオリパを選んでください</div>
+      {oripaList.map((o) => {
+        const rate = Number(o.totalSlots) ? ((o.tiers.length / Number(o.totalSlots)) * 100).toFixed(1) : null;
+        const log = logsById[o.id];
+        const totalSlots = Number(o.totalSlots) || 0;
+        const drawCount = log ? log.filter((e) => e.type === "draw").length : 0;
+        const soldOut = totalSlots > 0 && drawCount >= totalSlots;
+        return (
+          <button
+            key={o.id}
+            onClick={() => onSelect(o.id)}
+            className="press flex items-center justify-between rounded-xl px-4 py-4"
+            style={{ background: C.surface, border: `1px solid ${C.line}`, opacity: soldOut ? 0.6 : 1 }}
+          >
+            <div className="text-left">
+              <div className="flex items-center gap-2">
+                <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 16 }}>{o.name}</span>
+                {soldOut && (
+                  <span style={{ fontSize: 10, color: C.coral, border: `1px solid ${C.coral}`, borderRadius: 999, padding: "1px 7px" }}>終了</span>
+                )}
+              </div>
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
+                {yen(o.price)} / 回{rate ? ` ・ 当選率 ${rate}%` : ""}
+              </div>
+            </div>
+            <ChevronRight size={18} color={C.muted} />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ==================================================================
+// CUSTOMER: per-oripa record / history
+// ==================================================================
+function CustomerOripaView({
+  oripa,
+  fullLog,
+  sessionStart,
+  subTab,
+  setSubTab,
+  onBack,
+  recordDraw,
+  recordWin,
+  setHazureNotRedeemed,
+  undoLast,
+  nextCustomer,
+  deleteLogEntry,
+  stamp,
+}) {
+  const sessionLog = useMemo(() => fullLog.filter((e) => e.ts >= sessionStart), [fullLog, sessionStart]);
+  const guaranteeAmount = oripa.minGuarantee.enabled ? Number(oripa.minGuarantee.amount) || 0 : 0;
+  const sessionStats = useMemo(() => computeTotals(sessionLog, guaranteeAmount), [sessionLog, guaranteeAmount]);
+  const box = useMemo(() => computeBoxState(fullLog, oripa), [fullLog, oripa]);
+  const diffColor = sessionStats.diff > 0 ? C.mint : sessionStats.diff < 0 ? C.coral : C.paper;
+  const nextIsLastOne = oripa.lastOne.enabled && !box.lastOneAwarded && box.remainingSlots === 1;
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex items-center gap-2">
+        <button onClick={onBack} className="press flex items-center justify-center rounded-full" style={{ width: 32, height: 32, background: C.surfaceAlt2 }}>
+          <ArrowLeft size={16} color={C.paper} />
+        </button>
+        <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17 }}>{oripa.name}</span>
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          onClick={() => setSubTab("record")}
+          className="press flex-1 rounded-lg py-2"
+          style={{ background: subTab === "record" ? C.gold : C.surfaceAlt, color: subTab === "record" ? C.ink : C.muted, fontSize: 13, fontWeight: 700 }}
+        >
+          記録
+        </button>
+        <button
+          onClick={() => setSubTab("history")}
+          className="press flex-1 rounded-lg py-2"
+          style={{ background: subTab === "history" ? C.gold : C.surfaceAlt, color: subTab === "history" ? C.ink : C.muted, fontSize: 13, fontWeight: 700 }}
+        >
+          履歴
+        </button>
+      </div>
+
+      {subTab === "record" && (
+        <RecordPanel
+          oripa={oripa}
+          stats={sessionStats}
+          diffColor={diffColor}
+          box={box}
+          nextIsLastOne={nextIsLastOne}
+          recordDraw={() => recordDraw(oripa)}
+          recordWin={(t) => recordWin(oripa, t)}
+          setHazureNotRedeemed={(count) => setHazureNotRedeemed(oripa, count)}
+          undoLast={() => undoLast(oripa.id)}
+          nextCustomer={() => nextCustomer(oripa.id)}
+          hasSessionLog={sessionLog.length > 0}
+          stamp={stamp}
+        />
+      )}
+      {subTab === "history" && (
+        <HistoryPanel sessionLog={sessionLog} stats={sessionStats} diffColor={diffColor} deleteEntry={(entryId) => deleteLogEntry(oripa.id, entryId)} />
+      )}
+    </div>
+  );
+}
+
+function RecordPanel({ oripa, stats, diffColor, box, nextIsLastOne, recordDraw, recordWin, setHazureNotRedeemed, undoLast, nextCustomer, hasSessionLog, stamp }) {
+  const [notRedeemedInput, setNotRedeemedInput] = useState(null); // null = not editing
+  const totalSlots = Number(oripa.totalSlots) || 0;
+  const soldOut = totalSlots > 0 && box.remainingSlots <= 0;
+  const oddsTotal = box.remainingSlots;
+  const oddsWins = box.remainingTiers.length;
+  const oddsPct = oddsTotal > 0 ? (oddsWins / oddsTotal) * 100 : null;
+  const oddsPerDraw = oddsWins > 0 ? oddsTotal / oddsWins : null;
+
+  const openNotRedeemed = () => setNotRedeemedInput(String(stats.hazureNotRedeemedCount || 0));
+  const confirmNotRedeemed = () => {
+    setHazureNotRedeemed(notRedeemedInput);
+    setNotRedeemedInput(null);
+  };
+
+  return (
+    <div className="flex flex-col gap-5">
+      {/* ticket stub summary (this customer's session) */}
+      <div className="relative">
+        <div className="rounded-t-2xl px-5 pt-5 pb-4 relative" style={{ background: C.surface, border: `1px solid ${C.line}`, borderBottom: "none" }}>
+          <div className="flex justify-between items-start">
+            <div>
+              <div style={{ fontSize: 11, color: C.muted, letterSpacing: 1 }}>単価</div>
+              <div style={{ fontFamily: FONT_MONO, fontSize: 16, fontWeight: 700 }}>{yen(oripa.price)} / 回</div>
+            </div>
+            <div className="text-right">
+              <div style={{ fontSize: 11, color: C.muted, letterSpacing: 1 }}>設定当選率</div>
+              <div style={{ fontFamily: FONT_MONO, fontSize: 16, fontWeight: 700, color: C.gold }}>
+                {box.configuredRate != null ? `${oripa.tiers.length}/${oripa.totalSlots}` : "未設定"}
+              </div>
+            </div>
+          </div>
+
+          {stamp && (
+            <div
+              className="stamp-wrap absolute -top-3 right-4 rounded-full flex items-center justify-center"
+              style={{
+                width: 68,
+                height: 68,
+                border: `3px solid ${stamp === "lastone" ? C.gold : C.coral}`,
+                color: stamp === "lastone" ? C.gold : C.coral,
+                fontFamily: FONT_DISPLAY,
+                fontWeight: 800,
+                fontSize: stamp === "lastone" ? 12 : 15,
+                background: "rgba(18,21,28,0.9)",
+                textAlign: "center",
+                lineHeight: 1.15,
+              }}
+            >
+              {stamp === "lastone" ? "LAST\nONE" : "当選"}
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-4 mt-4">
+            <StatBlock label="引いた回数" value={`${stats.drawCount} 回`} />
+            <StatBlock label="あたり数" value={`${stats.winCount} 個`} color={C.gold} />
+            <StatBlock label="クジ合計金額" value={yen(stats.totalSpent)} color={C.coral} />
+            <StatBlock label="あたり合計金額" value={yen(stats.totalWinAmount)} color={C.mint} />
+          </div>
+          <div className="flex justify-between items-center mt-3 pt-3" style={{ borderTop: `1px dashed ${C.line}` }}>
+            <span style={{ fontSize: 11, color: C.muted }}>現在の当選確率</span>
+            <span style={{ fontFamily: FONT_MONO, fontSize: 13, fontWeight: 700, color: C.gold }}>
+              {oddsTotal > 0 ? `${oddsWins}/${oddsTotal}(${oddsPct.toFixed(1)}%)` : "—"}
+            </span>
+          </div>
+          {oddsPerDraw != null && (
+            <div className="flex justify-between items-center mt-1.5">
+              <span style={{ fontSize: 11, color: C.muted }}>平均</span>
+              <span style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.paper }}>約{oddsPerDraw.toFixed(1)}回に1回</span>
+            </div>
+          )}
+          {stats.hazureRedeemedCount > 0 && (
+            <div className="flex justify-between items-center mt-2">
+              <span style={{ fontSize: 11, color: C.muted }}>はずれ保証 ×{stats.hazureRedeemedCount}</span>
+              <span style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.muted }}>{yen(stats.totalHazureAmount)}</span>
+            </div>
+          )}
+        </div>
+
+        <div
+          style={{
+            height: 14,
+            backgroundImage: `radial-gradient(circle 7px, ${C.ink} 7px, transparent 7px)`,
+            backgroundSize: "16px 16px",
+            backgroundPosition: "-2px -7px",
+            backgroundColor: C.surface,
+            border: `1px solid ${C.line}`,
+            borderTop: "none",
+            borderBottom: "none",
+          }}
+        />
+
+        <div className="rounded-b-2xl px-5 py-4 flex items-center justify-between" style={{ background: C.surfaceAlt, border: `1px solid ${C.line}`, borderTop: "none" }}>
+          <div className="flex items-center gap-2">
+            {stats.diff >= 0 ? <TrendingUp size={18} color={diffColor} /> : <TrendingDown size={18} color={diffColor} />}
+            <span style={{ fontSize: 13, color: C.muted }}>差引損益</span>
+          </div>
+          <span style={{ fontFamily: FONT_MONO, fontSize: 22, fontWeight: 700, color: diffColor }}>
+            {stats.diff >= 0 ? "+" : ""}
+            {yen(stats.diff)}
+          </span>
+        </div>
+      </div>
+
+      {nextIsLastOne && (
+        <div className="rounded-xl px-4 py-3 flex items-center gap-2" style={{ background: "rgba(232,185,75,0.12)", border: `1px solid ${C.gold}`, color: C.gold }}>
+          <Crown size={16} />
+          <span style={{ fontSize: 12, fontWeight: 700 }}>
+            次で最後の1回！{oripa.lastOne.name || "ラストワン賞"}({yen(oripa.lastOne.amount)})が確定でもらえます
+          </span>
+        </div>
+      )}
+
+      {soldOut ? (
+        <div
+          className="w-full rounded-2xl py-5 flex flex-col items-center gap-1"
+          style={{ background: C.surfaceAlt, border: `1px solid ${C.line}`, color: C.muted }}
+        >
+          <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 18 }}>このオリパは終了しました</span>
+          <span style={{ fontSize: 12 }}>総枚数({totalSlots}口)に達しました</span>
+        </div>
+      ) : (
+        <button onClick={recordDraw} className="press w-full rounded-2xl py-5 flex flex-col items-center gap-1" style={{ background: C.gold, color: C.ink }}>
+          <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 20 }}>1回引く</span>
+          <span style={{ fontSize: 12, fontFamily: FONT_MONO }}>-{yen(oripa.price)}</span>
+        </button>
+      )}
+
+      {/* win selection list */}
+      <div>
+        <div className="flex items-center gap-1 mb-2" style={{ color: C.muted, fontSize: 12 }}>
+          <Sparkles size={13} />
+          <span>当たったら下から選ぶ(選ぶと消えます)</span>
+        </div>
+        {box.remainingTiers.length === 0 ? (
+          <div className="rounded-xl px-4 py-6 text-center" style={{ background: C.surfaceAlt, border: `1px dashed ${C.line}`, color: C.muted, fontSize: 13 }}>
+            残りのあたりはありません
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            {box.remainingTiers.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => recordWin(t)}
+                className="press flex flex-col items-start rounded-xl px-3 py-2.5"
+                style={{ background: C.surfaceAlt, border: `1px solid ${C.line}` }}
+              >
+                <span style={{ fontSize: 12, color: C.muted }}>{t.name}</span>
+                <span style={{ fontFamily: FONT_MONO, fontWeight: 700, color: C.gold, fontSize: 15 }}>{yen(t.amount)}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {oripa.minGuarantee.enabled && (
+        <div className="rounded-xl p-3 flex flex-col gap-2" style={{ background: C.surfaceAlt2, border: `1px solid ${C.line}` }}>
+          <div className="flex items-center justify-between">
+            <span style={{ fontSize: 12, color: C.muted, display: "flex", alignItems: "center", gap: 6 }}>
+              <ShieldCheck size={14} />
+              はずれ({stats.hazureTotalCount}枚)は基本すべて保証に出す扱いです
+            </span>
+          </div>
+          {notRedeemedInput === null ? (
+            <div className="flex items-center justify-between">
+              <span style={{ fontSize: 12, color: C.muted }}>
+                保証に出さなかった枚数:{" "}
+                <span style={{ fontFamily: FONT_MONO, color: C.paper, fontWeight: 700 }}>{stats.hazureNotRedeemedCount}枚</span>
+              </span>
+              <button onClick={openNotRedeemed} className="press rounded-lg px-3 py-1.5" style={{ border: `1px solid ${C.line}`, color: C.gold, fontSize: 12, fontWeight: 700 }}>
+                入力する
+              </button>
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              <input
+                type="number"
+                inputMode="numeric"
+                min="0"
+                value={notRedeemedInput}
+                onChange={(e) => setNotRedeemedInput(e.target.value)}
+                autoFocus
+                style={inputStyle}
+                placeholder="出さなかった枚数"
+              />
+              <button onClick={confirmNotRedeemed} className="press rounded-lg px-4" style={{ background: C.gold, color: C.ink, fontWeight: 700, fontSize: 13 }}>
+                更新
+              </button>
+              <button onClick={() => setNotRedeemedInput(null)} className="press rounded-lg px-3" style={{ border: `1px solid ${C.line}`, color: C.muted }}>
+                <X size={16} />
+              </button>
+            </div>
+          )}
+          <div style={{ fontSize: 11, color: C.muted }}>
+            保証対象:{stats.hazureRedeemedCount}枚 × {yen(oripa.minGuarantee.amount)} = {yen(stats.totalHazureAmount)}
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between pt-1">
+        {hasSessionLog ? (
+          <button onClick={undoLast} className="press flex items-center gap-1.5" style={{ color: C.muted, fontSize: 12 }}>
+            <Undo2 size={14} />
+            直前の記録を取り消す
+          </button>
+        ) : (
+          <span />
+        )}
+        <button onClick={nextCustomer} className="press flex items-center gap-1.5" style={{ color: C.muted, fontSize: 12 }}>
+          <RotateCcw size={14} />
+          次のお客様へ
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function HistoryPanel({ sessionLog, stats, diffColor, deleteEntry }) {
+  const sorted = [...sessionLog].sort((a, b) => b.ts - a.ts);
+  const fmtTime = (ts) => {
+    const d = new Date(ts);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+  const rowIcon = (e) => {
+    if (e.type === "draw") return <Ticket size={15} color={C.muted} />;
+    if (e.type === "hazureNotRedeemed") return <ShieldCheck size={15} color={C.muted} />;
+    if (e.isLastOne) return <Crown size={15} color={C.gold} />;
+    return <Sparkles size={15} color={C.gold} />;
+  };
+  const rowLabel = (e) => (e.type === "draw" ? "1回引く" : e.type === "hazureNotRedeemed" ? `保証に出さない枚数を${e.count}枚に設定` : e.name);
+  const rowAmount = (e) => (e.type === "draw" ? e.cost : e.type === "hazureNotRedeemed" ? null : e.amount);
+  const rowSign = (e) => (e.type === "draw" ? "-" : "+");
+  const rowColor = (e) => (e.type === "draw" ? C.coral : e.type === "hazureNotRedeemed" ? C.muted : C.mint);
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="rounded-xl p-4" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+        <div className="grid grid-cols-2 gap-4">
+          <StatBlock label="引いた回数" value={`${stats.drawCount} 回`} />
+          <StatBlock label="あたり数" value={`${stats.winCount} 個`} color={C.gold} />
+          <StatBlock label="クジ合計金額" value={yen(stats.totalSpent)} color={C.coral} />
+          <StatBlock label="あたり合計金額" value={yen(stats.totalWinAmount)} color={C.mint} />
+        </div>
+        {stats.hazureTotalCount > 0 && (
+          <div className="flex justify-between items-center mt-2">
+            <span style={{ fontSize: 12, color: C.muted }}>
+              はずれ保証(保証対象{stats.hazureRedeemedCount}枚 / 対象外{stats.hazureNotRedeemedCount}枚)
+            </span>
+            <span style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.muted }}>{yen(stats.totalHazureAmount)}</span>
+          </div>
+        )}
+        <div className="flex justify-between items-center mt-4 pt-4" style={{ borderTop: `1px dashed ${C.line}` }}>
+          <span style={{ fontSize: 13, color: C.muted }}>差引損益</span>
+          <span style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 18, color: diffColor }}>
+            {stats.diff >= 0 ? "+" : ""}
+            {yen(stats.diff)}
+          </span>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        {sorted.length === 0 && <div style={{ fontSize: 13, color: C.muted, textAlign: "center", padding: "24px 0" }}>まだ記録がありません</div>}
+        {sorted.map((e) => (
+          <div key={e.id} className="flex items-center justify-between rounded-lg px-3 py-2.5" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+            <div className="flex items-center gap-2.5">
+              {rowIcon(e)}
+              <div>
+                <div style={{ fontSize: 13 }}>{rowLabel(e)}</div>
+                <div style={{ fontSize: 10, color: C.muted, fontFamily: FONT_MONO }}>{fmtTime(e.ts)}</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              {rowAmount(e) != null && (
+                <span style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 14, color: rowColor(e) }}>
+                  {rowSign(e)}
+                  {yen(rowAmount(e))}
+                </span>
+              )}
+              <button onClick={() => deleteEntry(e.id)}>
+                <X size={14} color={C.muted} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ==================================================================
+// STORE: password gate
+// ==================================================================
+function PasswordGate({ onUnlock }) {
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState(false);
+
+  const submit = () => {
+    if (pw === STORE_PASSWORD) {
+      onUnlock();
+    } else {
+      setErr(true);
+      setPw("");
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-center gap-4 pt-10">
+      <div className="flex items-center justify-center rounded-full" style={{ width: 56, height: 56, background: C.surfaceAlt2 }}>
+        <Lock size={22} color={C.gold} />
+      </div>
+      <div className="text-center">
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 16 }}>店舗側パスワード</div>
+        <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>設定・集計を見るにはパスワードが必要です</div>
+      </div>
+      <input
+        type="password"
+        inputMode="numeric"
+        value={pw}
+        onChange={(e) => {
+          setPw(e.target.value);
+          setErr(false);
+        }}
+        onKeyDown={(e) => e.key === "Enter" && submit()}
+        placeholder="パスワード"
+        style={{ ...inputStyle, textAlign: "center", letterSpacing: 4, maxWidth: 220 }}
+      />
+      {err && <div style={{ fontSize: 12, color: C.coral }}>パスワードが違います</div>}
+      <button onClick={submit} className="press rounded-xl px-8 py-3" style={{ background: C.gold, color: C.ink, fontWeight: 700, fontSize: 14 }}>
+        開く
+      </button>
+    </div>
+  );
+}
+
+// ==================================================================
+// STORE: shell (aggregate / manage)
+// ==================================================================
+function StoreShell({
+  storeSubTab,
+  setStoreSubTab,
+  onLock,
+  oripaList,
+  logsById,
+  addOripa,
+  updateOripa,
+  deleteOripa,
+  clearLog,
+  customers,
+  sessions,
+  settlements,
+  settleToday,
+  updateSettlement,
+}) {
+  const tabs = [
+    { key: "aggregate", label: "集計", icon: BarChart3 },
+    { key: "manage", label: "オリパ管理", icon: Settings2 },
+    { key: "customers", label: "お客様", icon: UserSearch },
+    { key: "daily", label: "本日/精算", icon: CalendarCheck },
+  ];
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Store size={18} color={C.gold} />
+          <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17 }}>店舗側</span>
+        </div>
+        <button onClick={onLock} className="press flex items-center gap-1.5 rounded-full px-3 py-1.5" style={{ background: C.surfaceAlt2, color: C.muted, fontSize: 12 }}>
+          <Lock size={13} />
+          ロック
+        </button>
+      </div>
+
+      <div className="flex gap-2 overflow-x-auto pb-1" style={{ WebkitOverflowScrolling: "touch" }}>
+        {tabs.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setStoreSubTab(t.key)}
+            className="press flex items-center justify-center gap-1.5 rounded-lg py-2 px-3"
+            style={{
+              background: storeSubTab === t.key ? C.gold : C.surfaceAlt,
+              color: storeSubTab === t.key ? C.ink : C.muted,
+              fontSize: 12,
+              fontWeight: 700,
+              whiteSpace: "nowrap",
+              flexShrink: 0,
+            }}
+          >
+            <t.icon size={13} />
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {storeSubTab === "aggregate" && <StoreAggregate oripaList={oripaList} logsById={logsById} />}
+      {storeSubTab === "manage" && (
+        <StoreManage oripaList={oripaList} logsById={logsById} addOripa={addOripa} updateOripa={updateOripa} deleteOripa={deleteOripa} clearLog={clearLog} />
+      )}
+      {storeSubTab === "customers" && (
+        <CustomerMaster customers={customers} sessions={sessions} oripaList={oripaList} logsById={logsById} />
+      )}
+      {storeSubTab === "daily" && (
+        <DailyDashboard
+          oripaList={oripaList}
+          logsById={logsById}
+          sessions={sessions}
+          settlements={settlements}
+          settleToday={settleToday}
+          updateSettlement={updateSettlement}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------- STORE: 営業中のお客様管理 ----------
+function ActiveCustomers({ oripaList, logsById, sessions, customers, startSession, endSession, reopenSession, recordSessionDraw, recordSessionWin, setSessionHazureNotRedeemed, undoLastSessionEntry }) {
+  const [formOpen, setFormOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [oripaId, setOripaId] = useState("");
+  const [payment, setPayment] = useState("cash");
+
+  useEffect(() => {
+    if (!oripaId && oripaList.length) setOripaId(oripaList[0].id);
+  }, [oripaList, oripaId]);
+
+  const activeSessions = sessions.filter((s) => !s.endTs).sort((a, b) => b.startTs - a.startTs);
+  const endedToday = sessions
+    .filter((s) => s.endTs && dateKeyOf(s.endTs) === todayKey())
+    .sort((a, b) => b.endTs - a.endTs);
+
+  const nameSuggestions =
+    name.trim().length > 0
+      ? customers
+          .filter((c) => c.name.toLowerCase().includes(name.trim().toLowerCase()) && c.name !== name)
+          .sort((a, b) => b.lastVisitTs - a.lastVisitTs)
+          .slice(0, 5)
+      : [];
+
+  const submit = () => {
+    if (!name.trim() || !oripaId) return;
+    startSession(name, oripaId, payment);
+    setName("");
+    setShowSuggestions(false);
+    setFormOpen(false);
+  };
+
+  return (
+    <div className="flex flex-col gap-4">
+      {!formOpen ? (
+        <button onClick={() => setFormOpen(true)} className="press flex items-center justify-center gap-2 rounded-xl py-3" style={{ background: C.gold, color: C.ink, fontWeight: 700 }}>
+          <UserPlus size={16} />
+          お客様を追加
+        </button>
+      ) : (
+        <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+          <div className="relative">
+            <label style={labelStyle}>お客様名</label>
+            <input
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value);
+                setShowSuggestions(true);
+              }}
+              onFocus={() => setShowSuggestions(true)}
+              style={{ ...inputStyle, fontFamily: FONT_BODY }}
+              placeholder="例: 田中さん"
+              autoFocus
+              autoComplete="off"
+            />
+            {showSuggestions && nameSuggestions.length > 0 && (
+              <div
+                className="absolute left-0 right-0 mt-1 rounded-lg overflow-hidden z-10"
+                style={{ background: C.surfaceAlt2, border: `1px solid ${C.gold}`, top: "100%" }}
+              >
+                {nameSuggestions.map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => {
+                      setName(c.name);
+                      setShowSuggestions(false);
+                    }}
+                    className="press w-full flex items-center justify-between px-3 py-2.5"
+                    style={{ borderBottom: `1px solid ${C.line}` }}
+                  >
+                    <span style={{ fontSize: 13 }}>{c.name}</span>
+                    <span style={{ fontSize: 10, color: C.muted }}>来店{c.visitCount}回</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div>
+            <label style={labelStyle}>利用するオリパ</label>
+            <select
+              value={oripaId}
+              onChange={(e) => setOripaId(e.target.value)}
+              onFocus={() => setShowSuggestions(false)}
+              style={{ ...inputStyle, fontFamily: FONT_BODY }}
+            >
+              {oripaList.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label style={labelStyle}>支払い方法</label>
+            <div className="flex gap-2">
+              {[
+                ["cash", "現金"],
+                ["cashless", "キャッシュレス"],
+                ["other", "その他"],
+              ].map(([v, l]) => (
+                <button
+                  key={v}
+                  onClick={() => {
+                    setPayment(v);
+                    setShowSuggestions(false);
+                  }}
+                  className="press flex-1 rounded-lg py-2"
+                  style={{ background: payment === v ? C.gold : C.surfaceAlt, color: payment === v ? C.ink : C.muted, fontSize: 12, fontWeight: 700 }}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => setFormOpen(false)} className="press flex-1 py-2 rounded-lg" style={{ border: `1px solid ${C.line}`, color: C.paper, fontSize: 13 }}>
+              キャンセル
+            </button>
+            <button onClick={submit} className="press flex-1 py-2 rounded-lg" style={{ background: C.gold, color: C.ink, fontSize: 13, fontWeight: 700 }}>
+              開始
+            </button>
+          </div>
+        </div>
+      )}
+
+      {activeSessions.length === 0 ? (
+        <div className="rounded-xl px-4 py-8 text-center" style={{ background: C.surface, border: `1px dashed ${C.line}`, color: C.muted, fontSize: 13 }}>
+          営業中のお客様はいません
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {activeSessions.map((s) => {
+            const oripa = oripaList.find((o) => o.id === s.oripaId);
+            if (!oripa) return null;
+            return (
+              <SessionCard
+                key={s.id}
+                session={s}
+                oripa={oripa}
+                fullLog={logsById[oripa.id] || []}
+                onDraw={() => recordSessionDraw(s)}
+                onWin={(t) => recordSessionWin(s, t)}
+                onHazure={(count) => setSessionHazureNotRedeemed(s, count)}
+                onEnd={() => endSession(s.id)}
+                onUndo={() => undoLastSessionEntry(s)}
+              />
+            );
+          })}
+        </div>
+      )}
+
+      {endedToday.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-1.5" style={{ color: C.muted, fontSize: 12 }}>
+            <CalendarCheck size={13} />
+            <span>本日の終了済みお客様</span>
+          </div>
+          {endedToday.map((s) => {
+            const oripa = oripaList.find((o) => o.id === s.oripaId);
+            const log = oripa ? (logsById[oripa.id] || []).filter((e) => e.sessionId === s.id) : [];
+            const guaranteeAmount = oripa && oripa.minGuarantee.enabled ? Number(oripa.minGuarantee.amount) || 0 : 0;
+            const totals = computeTotals(log, guaranteeAmount);
+            const dColor = totals.diff > 0 ? C.mint : totals.diff < 0 ? C.coral : C.paper;
+            return (
+              <div key={s.id} className="flex items-center justify-between rounded-lg px-3 py-2.5" style={{ background: C.surfaceAlt, border: `1px solid ${C.line}` }}>
+                <div>
+                  <div style={{ fontSize: 13 }}>
+                    {s.customerName} <span style={{ color: C.muted, fontSize: 11 }}>・ {s.oripaName}</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: C.muted }}>
+                    {totals.drawCount}口 ・ {yen(totals.totalSpent)} → {yen(totals.totalPayout)}
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 13, color: dColor }}>
+                    {totals.diff >= 0 ? "+" : ""}
+                    {yen(totals.diff)}
+                  </span>
+                  <button onClick={() => reopenSession(s.id)} className="press rounded-lg px-2 py-1" style={{ border: `1px solid ${C.line}`, color: C.muted, fontSize: 10 }}>
+                    再開
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const RANK_GROUP_COLOR = { rainbow: C.gold, gold: "#D4A94A", silver: "#B8C0CC", bronze: "#B08D57", other: C.muted };
+const RANK_GROUP_LABEL = { rainbow: "🌈 虹枠", gold: "🥇 金枠", silver: "🥈 銀枠", bronze: "🥉 銅枠", other: "その他" };
+const RANK_GROUP_ORDER = ["rainbow", "gold", "silver", "bronze", "other"];
+
+function RankGroupedPicker({ tiers, onPick }) {
+  const groups = {};
+  tiers.forEach((t) => {
+    const key = RANK_GROUP_ORDER.includes(t.rank) ? t.rank : "other";
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(t);
+  });
+
+  return (
+    <div className="flex flex-col gap-3">
+      {RANK_GROUP_ORDER.filter((k) => groups[k] && groups[k].length > 0).map((k) => (
+        <div key={k} className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between">
+            <span style={{ fontSize: 11, fontWeight: 700, color: RANK_GROUP_COLOR[k] }}>{RANK_GROUP_LABEL[k]}</span>
+            <span style={{ fontSize: 10, color: C.muted }}>{groups[k].length}個</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {groups[k].map((t) => (
+              <button
+                key={t.id}
+                onClick={() => onPick(t)}
+                className="press flex flex-col items-start rounded-lg px-3 py-2"
+                style={{ background: C.surfaceAlt, border: `1px solid ${RANK_GROUP_COLOR[k]}` }}
+              >
+                <span style={{ fontSize: 11, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%" }}>
+                  {t.name}
+                </span>
+                <span style={{ fontFamily: FONT_MONO, fontWeight: 700, color: RANK_GROUP_COLOR[k], fontSize: 13 }}>{yen(t.amount)}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SessionCard({ session, oripa, fullLog, onDraw, onWin, onHazure, onEnd, onUndo }) {
+  const [notRedeemedInput, setNotRedeemedInput] = useState(null);
+  const [showWinPicker, setShowWinPicker] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const sessionLog = useMemo(() => fullLog.filter((e) => e.sessionId === session.id), [fullLog, session.id]);
+  const guaranteeAmount = oripa.minGuarantee.enabled ? Number(oripa.minGuarantee.amount) || 0 : 0;
+  const totals = useMemo(() => computeTotals(sessionLog, guaranteeAmount), [sessionLog, guaranteeAmount]);
+  const box = useMemo(() => computeBoxState(fullLog, oripa), [fullLog, oripa]);
+  const diffColor = totals.diff > 0 ? C.mint : totals.diff < 0 ? C.coral : C.paper;
+  const paymentLabel = { cash: "現金", cashless: "キャッシュレス", other: "その他" }[session.paymentMethod] || "現金";
+
+  const openNotRedeemed = () => setNotRedeemedInput(String(totals.hazureNotRedeemedCount || 0));
+  const confirmNotRedeemed = () => {
+    onHazure(notRedeemedInput);
+    setNotRedeemedInput(null);
+  };
+
+  return (
+    <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+      <div className="flex items-center justify-between">
+        <div>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15 }}>{session.customerName}</div>
+          <div style={{ fontSize: 11, color: C.muted }}>
+            {oripa.name} ・ {paymentLabel}
+          </div>
+        </div>
+        <button onClick={onEnd} className="press rounded-lg px-3 py-1.5" style={{ border: `1px solid ${C.line}`, color: C.muted, fontSize: 12 }}>
+          終了
+        </button>
+      </div>
+
+      {Number(oripa.totalSlots) > 0 && (
+        <div className="rounded-lg px-3 py-2 flex flex-col gap-1.5" style={{ background: C.surfaceAlt2, border: `1px solid ${C.line}` }}>
+          <div className="flex items-center justify-between">
+            <span style={{ fontSize: 11, color: C.muted }}>全体の当選確率</span>
+            <span style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 14, color: C.gold }}>
+              {oripa.tiers.length}/{oripa.totalSlots}
+              {box.configuredRate != null ? `(${box.configuredRate.toFixed(1)}%)` : ""}
+            </span>
+          </div>
+          {oripa.minGuarantee.enabled && (
+            <div className="flex items-center justify-between">
+              <span style={{ fontSize: 11, color: C.muted }}>ハズレ(全体)・封入額</span>
+              <span style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 14, color: C.muted }}>
+                {Math.max(0, Number(oripa.totalSlots) - oripa.tiers.length)}口 ・ {yen(Math.max(0, Number(oripa.totalSlots) - oripa.tiers.length) * guaranteeAmount)}
+              </span>
+            </div>
+          )}
+          <div className="flex items-center justify-between" style={{ borderTop: `1px dashed ${C.line}`, paddingTop: 6, marginTop: 2 }}>
+            <span style={{ fontSize: 11, color: C.muted }}>残りあたり数(残り口数中)</span>
+            <span style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 14, color: C.gold }}>
+              {box.remainingTiers.length}/{box.remainingSlots}
+              {box.remainingSlots > 0 ? `(${((box.remainingTiers.length / box.remainingSlots) * 100).toFixed(1)}%)` : ""}
+            </span>
+          </div>
+          {oripa.minGuarantee.enabled && (
+            <div className="flex items-center justify-between">
+              <span style={{ fontSize: 11, color: C.muted }}>残りハズレ・封入額</span>
+              <span style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 14, color: C.muted }}>
+                {box.remainingHazureCount}口 ・ {yen(box.remainingHazureCount * guaranteeAmount)}
+              </span>
+            </div>
+          )}
+          <div className="flex items-center justify-between">
+            <span style={{ fontSize: 11, color: C.muted }}>残りのあたり額</span>
+            <span style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 14, color: C.mint }}>
+              {yen(box.remainingPrizeAmount + box.lastOneRemainingValue)}
+            </span>
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-3">
+        <StatBlock label="購入口数" value={`${totals.drawCount}口`} />
+        <StatBlock label="あたり回数" value={`${totals.winCount}回`} color={C.gold} />
+        <StatBlock label="支払金額" value={yen(totals.totalSpent)} color={C.coral} />
+        <StatBlock label="獲得景品総額" value={yen(totals.totalPayout)} color={C.mint} />
+      </div>
+      <div className="flex justify-between items-center">
+        <span style={{ fontSize: 12, color: C.muted }}>現在損益</span>
+        <span style={{ fontFamily: FONT_MONO, fontSize: 14, fontWeight: 700, color: diffColor }}>
+          {totals.diff >= 0 ? "+" : ""}
+          {yen(totals.diff)}
+        </span>
+      </div>
+      <div className="flex justify-between items-center">
+        <span style={{ fontSize: 12, color: C.muted }}>回収率</span>
+        <span style={{ fontFamily: FONT_MONO, fontSize: 13, fontWeight: 700 }}>{totals.recoveryRate != null ? `${totals.recoveryRate.toFixed(1)}%` : "—"}</span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <button onClick={onDraw} className="press rounded-lg py-2.5" style={{ background: C.gold, color: C.ink, fontWeight: 700, fontSize: 13 }}>
+          ＋1口購入({yen(oripa.price)})
+        </button>
+        <button
+          onClick={() => setShowWinPicker((v) => !v)}
+          className="press rounded-lg py-2.5"
+          style={{ border: `1px solid ${C.line}`, color: C.gold, fontWeight: 700, fontSize: 13 }}
+        >
+          景品を記録
+        </button>
+      </div>
+
+      {showWinPicker &&
+        (box.remainingTiers.length === 0 ? (
+          <div style={{ fontSize: 12, color: C.muted, textAlign: "center" }}>残りのあたりはありません</div>
+        ) : (
+          <RankGroupedPicker
+            tiers={box.remainingTiers}
+            onPick={(t) => {
+              onWin(t);
+              setShowWinPicker(false);
+            }}
+          />
+        ))}
+
+      {oripa.minGuarantee.enabled &&
+        (notRedeemedInput === null ? (
+          <button
+            onClick={openNotRedeemed}
+            className="press flex items-center justify-between rounded-lg px-3 py-2"
+            style={{ border: `1px solid ${C.line}`, fontSize: 12, color: C.muted }}
+          >
+            <span>保証に出さなかった枚数</span>
+            <span style={{ fontFamily: FONT_MONO, color: C.paper, fontWeight: 700 }}>{totals.hazureNotRedeemedCount}枚</span>
+          </button>
+        ) : (
+          <div className="flex gap-2">
+            <input type="number" inputMode="numeric" value={notRedeemedInput} onChange={(e) => setNotRedeemedInput(e.target.value)} style={inputStyle} autoFocus />
+            <button onClick={confirmNotRedeemed} className="press rounded-lg px-4" style={{ background: C.gold, color: C.ink, fontWeight: 700, fontSize: 13 }}>
+              更新
+            </button>
+            <button onClick={() => setNotRedeemedInput(null)} className="press rounded-lg px-3" style={{ border: `1px solid ${C.line}`, color: C.muted }}>
+              <X size={16} />
+            </button>
+          </div>
+        ))}
+
+      <div className="flex items-center justify-between pt-1" style={{ borderTop: `1px dashed ${C.line}` }}>
+        {sessionLog.length > 0 ? (
+          <button onClick={onUndo} className="press flex items-center gap-1.5" style={{ color: C.muted, fontSize: 12 }}>
+            <Undo2 size={13} />
+            一つ前を訂正
+          </button>
+        ) : (
+          <span />
+        )}
+        <button onClick={() => setShowHistory((v) => !v)} className="press flex items-center gap-1.5" style={{ color: C.gold, fontSize: 12 }}>
+          <History size={13} />
+          {showHistory ? "履歴を閉じる" : "あたり履歴を見る"}
+        </button>
+      </div>
+
+      {showHistory && <PersonalHistory sessionLog={sessionLog} />}
+    </div>
+  );
+}
+
+function PersonalHistory({ sessionLog }) {
+  const sorted = sessionLog.filter((e) => e.type === "win").sort((a, b) => b.ts - a.ts);
+  const fmtTime = (ts) => {
+    const d = new Date(ts);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+  const rowIcon = (e) => (e.isLastOne ? <Crown size={14} color={C.gold} /> : <Sparkles size={14} color={C.gold} />);
+
+  if (sorted.length === 0) {
+    return <div style={{ fontSize: 12, color: C.muted, textAlign: "center", padding: "12px 0" }}>まだあたりがありません</div>;
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5 rounded-lg p-2" style={{ background: C.surfaceAlt2 }}>
+      {sorted.map((e) => (
+        <div key={e.id} className="flex items-center justify-between rounded-lg px-2.5 py-2" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+          <div className="flex items-center gap-2">
+            {rowIcon(e)}
+            <div>
+              <div style={{ fontSize: 12 }}>{e.name}</div>
+              <div style={{ fontSize: 9, color: C.muted, fontFamily: FONT_MONO }}>{fmtTime(e.ts)}</div>
+            </div>
+          </div>
+          <span style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 13, color: C.mint }}>+{yen(e.amount)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------- STORE: お客様マスター ----------
+function CustomerMaster({ customers, sessions, oripaList, logsById }) {
+  const [query, setQuery] = useState("");
+  const [selectedId, setSelectedId] = useState(null);
+
+  const filtered = customers.filter((c) => c.name.toLowerCase().includes(query.toLowerCase())).sort((a, b) => b.lastVisitTs - a.lastVisitTs);
+  const selected = customers.find((c) => c.id === selectedId);
+
+  if (selected) {
+    return <CustomerDetail customer={selected} sessions={sessions} oripaList={oripaList} logsById={logsById} onBack={() => setSelectedId(null)} />;
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="relative">
+        <Search size={14} color={C.muted} style={{ position: "absolute", left: 12, top: 12 }} />
+        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="お客様名で検索" style={{ ...inputStyle, fontFamily: FONT_BODY, paddingLeft: 34 }} />
+      </div>
+      {filtered.length === 0 ? (
+        <div className="rounded-xl px-4 py-8 text-center" style={{ background: C.surface, border: `1px dashed ${C.line}`, color: C.muted, fontSize: 13 }}>
+          お客様が見つかりません
+        </div>
+      ) : (
+        filtered.map((c) => {
+          const life = computeCustomerLifetime(c, sessions, oripaList, logsById);
+          const diffColor = life.diff > 0 ? C.mint : life.diff < 0 ? C.coral : C.paper;
+          return (
+            <button
+              key={c.id}
+              onClick={() => setSelectedId(c.id)}
+              className="press flex items-center justify-between rounded-xl px-4 py-3"
+              style={{ background: C.surface, border: `1px solid ${C.line}` }}
+            >
+              <div className="text-left">
+                <div style={{ fontSize: 14, fontWeight: 700 }}>{c.name}</div>
+                <div style={{ fontSize: 11, color: C.muted }}>来店{c.visitCount}回</div>
+              </div>
+              <span style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 14, color: diffColor }}>
+                {life.diff >= 0 ? "+" : ""}
+                {yen(life.diff)}
+              </span>
+            </button>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+function CustomerDetail({ customer, sessions, oripaList, logsById, onBack }) {
+  const life = computeCustomerLifetime(customer, sessions, oripaList, logsById);
+  const diffColor = life.diff > 0 ? C.mint : life.diff < 0 ? C.coral : C.paper;
+  const fmtDate = (ts) => {
+    const d = new Date(ts);
+    return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+  };
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-2">
+        <button onClick={onBack} className="press flex items-center justify-center rounded-full" style={{ width: 32, height: 32, background: C.surfaceAlt2 }}>
+          <ArrowLeft size={16} color={C.paper} />
+        </button>
+        <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17 }}>{customer.name}</span>
+      </div>
+
+      <div className="rounded-xl p-4" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+        <div className="grid grid-cols-2 gap-4">
+          <StatBlock label="累計支払額" value={yen(life.totalSpent)} color={C.coral} />
+          <StatBlock label="累計獲得景品額" value={yen(life.totalPayout)} color={C.mint} />
+          <StatBlock label="来店回数" value={`${life.visitCount}回`} />
+          <StatBlock label="累計購入口数" value={`${life.totalSlots}口`} />
+        </div>
+        <div className="flex justify-between items-center mt-3 pt-3" style={{ borderTop: `1px dashed ${C.line}` }}>
+          <span style={{ fontSize: 13, color: C.muted }}>累計損益</span>
+          <span style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 18, color: diffColor }}>
+            {life.diff >= 0 ? "+" : ""}
+            {yen(life.diff)}
+          </span>
+        </div>
+        <div className="flex justify-between items-center mt-2">
+          <span style={{ fontSize: 12, color: C.muted }}>累計回収率</span>
+          <span style={{ fontFamily: FONT_MONO, fontSize: 13 }}>{life.recoveryRate != null ? `${life.recoveryRate.toFixed(1)}%` : "—"}</span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="rounded-xl p-3" style={{ background: C.surfaceAlt2 }}>
+          <div className="flex items-center gap-1.5" style={{ color: C.mint, fontSize: 11 }}>
+            <Trophy size={12} />
+            過去最高勝ち額
+          </div>
+          <div style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 16, color: C.mint }}>{life.bestDiff != null ? `+${yen(life.bestDiff)}` : "—"}</div>
+        </div>
+        <div className="rounded-xl p-3" style={{ background: C.surfaceAlt2 }}>
+          <div className="flex items-center gap-1.5" style={{ color: C.coral, fontSize: 11 }}>
+            <TrendingDown size={12} />
+            過去最大負け額
+          </div>
+          <div style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 16, color: C.coral }}>{life.worstDiff != null ? yen(life.worstDiff) : "—"}</div>
+        </div>
+      </div>
+
+      <div>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>来店履歴</div>
+        <div className="flex flex-col gap-2">
+          {life.history.map(({ session, oripaName, totals }) => {
+            const dColor = totals.diff > 0 ? C.mint : totals.diff < 0 ? C.coral : C.paper;
+            return (
+              <div key={session.id} className="rounded-lg px-3 py-2.5" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+                <div className="flex justify-between items-center">
+                  <span style={{ fontSize: 12 }}>
+                    {fmtDate(session.startTs)} ・ {oripaName}
+                  </span>
+                  <span style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 13, color: dColor }}>
+                    {totals.diff >= 0 ? "+" : ""}
+                    {yen(totals.diff)}
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
+                  {totals.drawCount}口 ・ {yen(totals.totalSpent)} → {yen(totals.totalPayout)} {!session.endTs && "・ 営業中"}
+                </div>
+              </div>
+            );
+          })}
+          {life.history.length === 0 && <div style={{ fontSize: 12, color: C.muted, textAlign: "center", padding: "16px 0" }}>来店履歴がありません</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- STORE: 本日 / 日次精算 ----------
+function DailyDashboard({ oripaList, logsById, sessions, settlements, settleToday, updateSettlement }) {
+  const key = todayKey();
+  const settled = settlements.find((s) => s.dateKey === key);
+  const live = computeDailyStats(key, oripaList, logsById, sessions);
+  const stats = settled || live;
+  const [view, setView] = useState("today");
+  const [selectedSettlementId, setSelectedSettlementId] = useState(null);
+  const selectedSettlement = settlements.find((s) => s.id === selectedSettlementId) || null;
+
+  if (selectedSettlement) {
+    return <SettlementDetail settlement={selectedSettlement} onBack={() => setSelectedSettlementId(null)} updateSettlement={updateSettlement} />;
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex gap-2">
+        <button
+          onClick={() => setView("today")}
+          className="press flex-1 rounded-lg py-2"
+          style={{ background: view === "today" ? C.gold : C.surfaceAlt, color: view === "today" ? C.ink : C.muted, fontSize: 12, fontWeight: 700 }}
+        >
+          本日
+        </button>
+        <button
+          onClick={() => setView("history")}
+          className="press flex-1 rounded-lg py-2"
+          style={{ background: view === "history" ? C.gold : C.surfaceAlt, color: view === "history" ? C.ink : C.muted, fontSize: 12, fontWeight: 700 }}
+        >
+          精算履歴
+        </button>
+        <button
+          onClick={() => setView("month")}
+          className="press flex-1 rounded-lg py-2"
+          style={{ background: view === "month" ? C.gold : C.surfaceAlt, color: view === "month" ? C.ink : C.muted, fontSize: 12, fontWeight: 700 }}
+        >
+          月間集計
+        </button>
+      </div>
+
+      {view === "today" && (
+        <div className="flex flex-col gap-4">
+          <div
+            className="rounded-xl p-4"
+            style={{ background: C.surface, border: `1px solid ${settled ? C.line : C.gold}`, cursor: settled ? "pointer" : "default" }}
+            onClick={() => settled && setSelectedSettlementId(settled.id)}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15 }}>{key}</span>
+              {settled && (
+                <span style={{ fontSize: 10, color: C.mint, border: `1px solid ${C.mint}`, borderRadius: 999, padding: "2px 8px" }}>
+                  精算済み{settled.edited ? "(訂正あり)" : ""}
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <StatBlock label="本日の売上" value={yen(stats.totalSales)} color={C.mint} />
+              <StatBlock label="本日の販売口数" value={`${stats.totalSlots}口`} />
+              <StatBlock label="本日の来店人数" value={`${stats.visitorCount}人`} />
+              <StatBlock label="本日の景品払出額" value={yen(stats.totalPayout)} color={C.coral} />
+            </div>
+            <div className="flex justify-between items-center mt-3 pt-3" style={{ borderTop: `1px dashed ${C.line}` }}>
+              <span style={{ fontSize: 13, color: C.muted }}>本日の粗利益</span>
+              <span style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 18, color: stats.grossProfit >= 0 ? C.mint : C.coral }}>
+                {yen(stats.grossProfit)}
+              </span>
+            </div>
+            <div className="flex justify-between items-center mt-2">
+              <span style={{ fontSize: 12, color: C.muted }}>実還元率</span>
+              <span style={{ fontFamily: FONT_MONO, fontSize: 13 }}>{stats.actualRate != null ? `${stats.actualRate.toFixed(1)}%` : "—"}</span>
+            </div>
+
+            {stats.byOripa.length > 0 && (
+              <div className="flex flex-col gap-1.5 mt-3 pt-3" style={{ borderTop: `1px dashed ${C.line}` }}>
+                <div style={{ fontSize: 11, color: C.muted }}>オリパ別</div>
+                {stats.byOripa.map((o) => (
+                  <div key={o.oripaId} className="flex justify-between items-center">
+                    <span style={{ fontSize: 12 }}>{o.name}</span>
+                    <span style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.muted }}>
+                      {o.slots}口 ・ {yen(o.sales)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {settled && (
+              <div className="flex items-center justify-center gap-1 mt-3 pt-3" style={{ borderTop: `1px dashed ${C.line}`, color: C.gold, fontSize: 11 }}>
+                タップして詳細・訂正
+              </div>
+            )}
+          </div>
+
+          {!settled && (
+            <button onClick={settleToday} className="press flex items-center justify-center gap-2 rounded-xl py-3" style={{ background: C.gold, color: C.ink, fontWeight: 700 }}>
+              <CalendarCheck size={16} />
+              本日の日次精算を確定する
+            </button>
+          )}
+        </div>
+      )}
+
+      {view === "history" && (
+        <div className="flex flex-col gap-2">
+          {settlements.length === 0 ? (
+            <div className="rounded-xl px-4 py-8 text-center" style={{ background: C.surface, border: `1px dashed ${C.line}`, color: C.muted, fontSize: 13 }}>
+              まだ精算履歴がありません
+            </div>
+          ) : (
+            settlements
+              .slice()
+              .sort((a, b) => b.dateKey.localeCompare(a.dateKey))
+              .map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => setSelectedSettlementId(s.id)}
+                  className="press flex items-center justify-between rounded-lg px-3 py-2.5"
+                  style={{ background: C.surface, border: `1px solid ${C.line}` }}
+                >
+                  <span style={{ fontSize: 13 }}>
+                    {s.dateKey}
+                    {s.edited && <span style={{ color: C.gold, fontSize: 10 }}> (訂正あり)</span>}
+                  </span>
+                  <div className="flex items-center gap-3" style={{ fontSize: 11, color: C.muted }}>
+                    <span>{s.visitorCount}人</span>
+                    <span style={{ fontFamily: FONT_MONO, color: s.grossProfit >= 0 ? C.mint : C.coral, fontWeight: 700 }}>{yen(s.grossProfit)}</span>
+                    <ChevronRight size={14} />
+                  </div>
+                </button>
+              ))
+          )}
+        </div>
+      )}
+
+      {view === "month" && <MonthlySummary settlements={settlements} />}
+    </div>
+  );
+}
+
+function SettlementDetail({ settlement, onBack, updateSettlement }) {
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState(null);
+
+  const startEdit = () => {
+    setForm({
+      totalSales: String(settlement.totalSales),
+      totalSlots: String(settlement.totalSlots),
+      visitorCount: String(settlement.visitorCount),
+      totalPayout: String(settlement.totalPayout),
+    });
+    setEditing(true);
+  };
+
+  const saveEdit = () => {
+    const totalSales = Number(form.totalSales) || 0;
+    const totalSlots = Number(form.totalSlots) || 0;
+    const visitorCount = Number(form.visitorCount) || 0;
+    const totalPayout = Number(form.totalPayout) || 0;
+    const grossProfit = totalSales - totalPayout;
+    const actualRate = totalSales > 0 ? (totalPayout / totalSales) * 100 : null;
+    updateSettlement(settlement.id, (s) => ({ ...s, totalSales, totalSlots, visitorCount, totalPayout, grossProfit, actualRate }));
+    setEditing(false);
+    setForm(null);
+  };
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <button onClick={onBack} className="press flex items-center justify-center rounded-full" style={{ width: 32, height: 32, background: C.surfaceAlt2 }}>
+            <ArrowLeft size={16} color={C.paper} />
+          </button>
+          <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17 }}>{settlement.dateKey}</span>
+        </div>
+        {!editing && (
+          <button onClick={startEdit} className="press rounded-lg px-3 py-1.5" style={{ border: `1px solid ${C.gold}`, color: C.gold, fontSize: 12, fontWeight: 700 }}>
+            訂正する
+          </button>
+        )}
+      </div>
+
+      {settlement.edited && (
+        <div style={{ fontSize: 11, color: C.muted }}>
+          ※この日は手動で訂正されています{settlement.editedAt ? `(最終訂正: ${new Date(settlement.editedAt).toLocaleString("ja-JP")})` : ""}
+        </div>
+      )}
+
+      {editing ? (
+        <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.surface, border: `1px solid ${C.gold}` }}>
+          <div>
+            <label style={labelStyle}>売上(円)</label>
+            <input type="number" inputMode="numeric" value={form.totalSales} onChange={(e) => setForm((f) => ({ ...f, totalSales: e.target.value }))} style={inputStyle} />
+          </div>
+          <div>
+            <label style={labelStyle}>販売口数</label>
+            <input type="number" inputMode="numeric" value={form.totalSlots} onChange={(e) => setForm((f) => ({ ...f, totalSlots: e.target.value }))} style={inputStyle} />
+          </div>
+          <div>
+            <label style={labelStyle}>来店人数</label>
+            <input type="number" inputMode="numeric" value={form.visitorCount} onChange={(e) => setForm((f) => ({ ...f, visitorCount: e.target.value }))} style={inputStyle} />
+          </div>
+          <div>
+            <label style={labelStyle}>景品払出額(円)</label>
+            <input type="number" inputMode="numeric" value={form.totalPayout} onChange={(e) => setForm((f) => ({ ...f, totalPayout: e.target.value }))} style={inputStyle} />
+          </div>
+          <div style={{ fontSize: 11, color: C.muted }}>粗利益・実還元率は保存時に自動で再計算されます</div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                setEditing(false);
+                setForm(null);
+              }}
+              className="press flex-1 py-2 rounded-lg"
+              style={{ border: `1px solid ${C.line}`, color: C.paper, fontSize: 13 }}
+            >
+              キャンセル
+            </button>
+            <button onClick={saveEdit} className="press flex-1 py-2 rounded-lg" style={{ background: C.gold, color: C.ink, fontSize: 13, fontWeight: 700 }}>
+              保存する
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-xl p-4" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+          <div className="grid grid-cols-2 gap-4">
+            <StatBlock label="売上" value={yen(settlement.totalSales)} color={C.mint} />
+            <StatBlock label="販売口数" value={`${settlement.totalSlots}口`} />
+            <StatBlock label="来店人数" value={`${settlement.visitorCount}人`} />
+            <StatBlock label="景品払出額" value={yen(settlement.totalPayout)} color={C.coral} />
+          </div>
+          <div className="flex justify-between items-center mt-3 pt-3" style={{ borderTop: `1px dashed ${C.line}` }}>
+            <span style={{ fontSize: 13, color: C.muted }}>粗利益</span>
+            <span style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 18, color: settlement.grossProfit >= 0 ? C.mint : C.coral }}>
+              {yen(settlement.grossProfit)}
+            </span>
+          </div>
+          <div className="flex justify-between items-center mt-2">
+            <span style={{ fontSize: 12, color: C.muted }}>実還元率</span>
+            <span style={{ fontFamily: FONT_MONO, fontSize: 13 }}>{settlement.actualRate != null ? `${settlement.actualRate.toFixed(1)}%` : "—"}</span>
+          </div>
+        </div>
+      )}
+
+      {settlement.byOripa.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <div style={{ fontSize: 12, color: C.muted }}>オリパ別(参考値・自動集計時点のまま)</div>
+          {settlement.byOripa.map((o) => (
+            <div key={o.oripaId} className="flex justify-between items-center rounded-lg px-3 py-2" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+              <span style={{ fontSize: 13 }}>{o.name}</span>
+              <span style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.muted }}>
+                {o.slots}口 ・ {yen(o.sales)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MonthlySummary({ settlements }) {
+  const byMonth = {};
+  settlements.forEach((s) => {
+    const mk = monthKeyOf(s.dateKey);
+    if (!byMonth[mk]) byMonth[mk] = { totalSales: 0, totalSlots: 0, totalPayout: 0, grossProfit: 0, visitorCount: 0, oripaTotals: {} };
+    const m = byMonth[mk];
+    m.totalSales += s.totalSales;
+    m.totalSlots += s.totalSlots;
+    m.totalPayout += s.totalPayout;
+    m.grossProfit += s.grossProfit;
+    m.visitorCount += s.visitorCount;
+    (s.byOripa || []).forEach((o) => {
+      if (!m.oripaTotals[o.name]) m.oripaTotals[o.name] = 0;
+      m.oripaTotals[o.name] += o.sales;
+    });
+  });
+  const months = Object.keys(byMonth).sort().reverse();
+
+  if (months.length === 0) {
+    return (
+      <div className="rounded-xl px-4 py-8 text-center" style={{ background: C.surface, border: `1px dashed ${C.line}`, color: C.muted, fontSize: 13 }}>
+        精算データがまだありません
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      {months.map((mk) => {
+        const m = byMonth[mk];
+        const actualRate = m.totalSales > 0 ? (m.totalPayout / m.totalSales) * 100 : null;
+        const avgPerVisitor = m.visitorCount > 0 ? m.totalSales / m.visitorCount : null;
+        const avgSlotsPerVisitor = m.visitorCount > 0 ? m.totalSlots / m.visitorCount : null;
+        const ranking = Object.entries(m.oripaTotals).sort((a, b) => b[1] - a[1]);
+        return (
+          <div key={mk} className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15 }}>{mk}</div>
+            <div className="grid grid-cols-2 gap-4">
+              <StatBlock label="月間総売上" value={yen(m.totalSales)} color={C.mint} />
+              <StatBlock label="月間販売口数" value={`${m.totalSlots}口`} />
+              <StatBlock label="月間景品払出額" value={yen(m.totalPayout)} color={C.coral} />
+              <StatBlock label="月間粗利益" value={yen(m.grossProfit)} color={m.grossProfit >= 0 ? C.mint : C.coral} />
+            </div>
+            <div className="flex justify-between items-center pt-2" style={{ borderTop: `1px dashed ${C.line}` }}>
+              <span style={{ fontSize: 12, color: C.muted }}>月間実還元率</span>
+              <span style={{ fontFamily: FONT_MONO, fontSize: 13 }}>{actualRate != null ? `${actualRate.toFixed(1)}%` : "—"}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span style={{ fontSize: 12, color: C.muted }}>来店人数 / 1人あたり平均購入</span>
+              <span style={{ fontFamily: FONT_MONO, fontSize: 12 }}>
+                {m.visitorCount}人 ・ {avgPerVisitor != null ? yen(avgPerVisitor) : "—"} ({avgSlotsPerVisitor != null ? avgSlotsPerVisitor.toFixed(1) : "—"}口)
+              </span>
+            </div>
+            {ranking.length > 0 && (
+              <div className="flex flex-col gap-1.5 pt-2" style={{ borderTop: `1px dashed ${C.line}` }}>
+                <div style={{ fontSize: 11, color: C.muted }}>オリパ別売上ランキング</div>
+                {ranking.map(([name, sales], i) => (
+                  <div key={name} className="flex justify-between items-center">
+                    <span style={{ fontSize: 12 }}>
+                      {i + 1}. {name}
+                    </span>
+                    <span style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.muted }}>{yen(sales)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------- STORE: aggregate ----------
+function StoreAggregate({ oripaList, logsById }) {
+  const rows = oripaList.map((o) => {
+    const log = logsById[o.id] || [];
+    const guaranteeAmount = o.minGuarantee.enabled ? Number(o.minGuarantee.amount) || 0 : 0;
+    const totals = computeTotals(log, guaranteeAmount);
+    const box = computeBoxState(log, o);
+    return { oripa: o, log, totals, box };
+  });
+  const grand = rows.reduce(
+    (a, r) => ({
+      drawCount: a.drawCount + r.totals.drawCount,
+      totalSpent: a.totalSpent + r.totals.totalSpent,
+      totalPayout: a.totalPayout + r.totals.totalPayout,
+      shopProfit: a.shopProfit + r.totals.shopProfit,
+    }),
+    { drawCount: 0, totalSpent: 0, totalPayout: 0, shopProfit: 0 }
+  );
+
+  if (oripaList.length === 0) {
+    return <div style={{ fontSize: 13, color: C.muted, textAlign: "center", padding: "24px 0" }}>オリパを登録すると集計が表示されます</div>;
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="rounded-xl p-4" style={{ background: C.surfaceAlt2, border: `1px solid ${C.gold}` }}>
+        <div style={{ fontSize: 12, color: C.gold, marginBottom: 10, fontWeight: 700 }}>全オリパ合計</div>
+        <div className="grid grid-cols-2 gap-4">
+          <StatBlock label="総引いた回数" value={`${grand.drawCount} 回`} />
+          <StatBlock label="総クジ売上" value={yen(grand.totalSpent)} color={C.mint} />
+          <StatBlock label="総支払額(あたり)" value={yen(grand.totalPayout)} color={C.coral} />
+          <StatBlock label="店舗利益" value={yen(grand.shopProfit)} color={grand.shopProfit >= 0 ? C.mint : C.coral} />
+        </div>
+      </div>
+
+      {rows.map(({ oripa, totals, box }) => (
+        <StoreOripaCard key={oripa.id} oripa={oripa} totals={totals} box={box} />
+      ))}
+    </div>
+  );
+}
+
+function StoreOripaCard({ oripa, totals, box }) {
+  const [showSim, setShowSim] = useState(false);
+  return (
+    <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15 }}>{oripa.name}</div>
+      <div className="grid grid-cols-2 gap-4">
+        <StatBlock label="引いた回数" value={`${totals.drawCount} 回`} />
+        <StatBlock label="クジ売上" value={yen(totals.totalSpent)} color={C.mint} />
+        <StatBlock label="あたり支払額" value={yen(totals.totalPayout)} color={C.coral} />
+        <StatBlock label="店舗利益" value={yen(totals.shopProfit)} color={totals.shopProfit >= 0 ? C.mint : C.coral} />
+      </div>
+
+      <div className="flex justify-between items-center pt-2" style={{ borderTop: `1px dashed ${C.line}` }}>
+        <span style={{ fontSize: 12, color: C.muted }}>残り口数 / 残りクジ金額</span>
+        <span style={{ fontFamily: FONT_MONO, fontSize: 13 }}>
+          {box.remainingSlots}口 ・ {yen(box.remainingCost)}
+        </span>
+      </div>
+      <div className="flex justify-between items-center">
+        <span style={{ fontSize: 12, color: C.muted }}>封入率(あたり+ラストワン÷残り口数)</span>
+        <span style={{ fontFamily: FONT_MONO, fontSize: 13 }}>{box.insertionRate != null ? `${yen(box.insertionRate)} / 口` : "—"}</span>
+      </div>
+
+      <RateTable rows={remainingRateRows(box.remainingTiers, box.remainingSlots, oripa, box.lastOneAwarded)} />
+
+      <button
+        onClick={() => setShowSim((v) => !v)}
+        className="press flex items-center justify-center gap-1.5 rounded-lg py-2"
+        style={{ border: `1px solid ${C.line}`, color: C.gold, fontSize: 12, fontWeight: 700 }}
+      >
+        <Calculator size={13} />
+        {showSim ? "期待値シミュレーターを閉じる" : "期待値シミュレーターを見る"}
+      </button>
+
+      {showSim && <ExpectedValuePanel oripa={oripa} box={box} />}
+    </div>
+  );
+}
+
+function ExpectedValuePanel({ oripa, box }) {
+  const price = Number(oripa.price) || 0;
+  const R = box.remainingSlots;
+  const hazureAmount = oripa.minGuarantee.enabled ? Number(oripa.minGuarantee.amount) || 0 : 0;
+  const poolValue = box.remainingPrizeAmount + box.remainingHazureCount * hazureAmount;
+  const perSlotValue = R > 0 ? poolValue / R : 0;
+  const lastOnePerSlot = R > 0 ? box.lastOneRemainingValue / R : 0;
+
+  const rankCounts = useMemo(() => {
+    const c = { rainbow: 0, gold: 0, silver: 0, bronze: 0 };
+    box.remainingTiers.forEach((t) => {
+      if (t.rank && c[t.rank] !== undefined) c[t.rank] += 1;
+    });
+    return c;
+  }, [box.remainingTiers]);
+  const anyNormalCount = box.remainingTiers.length;
+  const goldPlus = rankCounts.rainbow + rankCounts.gold;
+  const silverPlus = goldPlus + rankCounts.silver;
+  const hasRankData = rankCounts.rainbow + rankCounts.gold + rankCounts.silver + rankCounts.bronze > 0;
+
+  const quantities = [5, 10, 20, 50, 100].map((n) => Math.min(n, R)).filter((n, i, arr) => n > 0 && arr.indexOf(n) === i);
+  if (R > 0 && !quantities.includes(R)) quantities.push(R);
+
+  const rows = useMemo(
+    () =>
+      quantities.map((n) => {
+        const expectedRecovery = n * perSlotValue + n * lastOnePerSlot;
+        const cost = n * price;
+        const expectedProfit = expectedRecovery - cost;
+        const returnRate = cost > 0 ? (expectedRecovery / cost) * 100 : null;
+        const profitProb = simulateProfitProbability(box.remainingTiers, box.remainingHazureCount, hazureAmount, box.lastOneRemainingValue, n, price, 1500);
+        return {
+          n,
+          expectedRecovery,
+          expectedProfit,
+          returnRate,
+          profitProb,
+          pNormal: probAtLeastOne(R, anyNormalCount, n),
+          pRainbow: probAtLeastOne(R, rankCounts.rainbow, n),
+          pGoldPlus: probAtLeastOne(R, goldPlus, n),
+          pSilverPlus: probAtLeastOne(R, silverPlus, n),
+        };
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [oripa.id, R, price, perSlotValue, lastOnePerSlot]
+  );
+
+  if (R === 0) {
+    return <div style={{ fontSize: 12, color: C.muted, textAlign: "center", padding: "8px 0" }}>このオリパは終了しています</div>;
+  }
+
+  const fullBuyReturn = price > 0 ? ((poolValue + box.lastOneRemainingValue) / (R * price)) * 100 : null;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-2 gap-3">
+        <div className="rounded-lg p-3" style={{ background: C.surfaceAlt2 }}>
+          <div style={{ fontSize: 10, color: C.muted }}>1口の期待損益</div>
+          <div style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 15, color: perSlotValue + lastOnePerSlot - price >= 0 ? C.mint : C.coral }}>
+            {yen(perSlotValue + lastOnePerSlot - price)}
+          </div>
+        </div>
+        <div className="rounded-lg p-3" style={{ background: C.surfaceAlt2 }}>
+          <div style={{ fontSize: 10, color: C.muted }}>全部買い切った場合の還元率</div>
+          <div style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 15, color: fullBuyReturn != null && fullBuyReturn >= 100 ? C.mint : C.coral }}>
+            {fullBuyReturn != null ? `${fullBuyReturn.toFixed(1)}%` : "—"}
+          </div>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <div style={{ minWidth: 560 }}>
+          <div className="grid gap-1 px-1 pb-1" style={{ gridTemplateColumns: "0.6fr 1fr 1fr 0.8fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr", fontSize: 9, color: C.muted }}>
+            <span>口数</span>
+            <span className="text-right">期待回収額</span>
+            <span className="text-right">期待損益</span>
+            <span className="text-right">還元率</span>
+            <span className="text-right">黒字確率</span>
+            <span className="text-right">当たり1つ以上</span>
+            <span className="text-right">虹以上</span>
+            <span className="text-right">金以上</span>
+            <span className="text-right">銀以上</span>
+          </div>
+          {rows.map((r) => (
+            <div
+              key={r.n}
+              className="grid items-center gap-1 rounded-lg px-1 py-2"
+              style={{ gridTemplateColumns: "0.6fr 1fr 1fr 0.8fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr", background: C.surfaceAlt, border: `1px solid ${C.line}`, marginBottom: 4 }}
+            >
+              <span style={{ fontFamily: FONT_MONO, fontSize: 11, fontWeight: 700 }}>{r.n}</span>
+              <span className="text-right" style={{ fontFamily: FONT_MONO, fontSize: 11 }}>
+                {yen(r.expectedRecovery)}
+              </span>
+              <span className="text-right" style={{ fontFamily: FONT_MONO, fontSize: 11, color: r.expectedProfit >= 0 ? C.mint : C.coral }}>
+                {r.expectedProfit >= 0 ? "+" : ""}
+                {yen(r.expectedProfit)}
+              </span>
+              <span className="text-right" style={{ fontFamily: FONT_MONO, fontSize: 11 }}>
+                {r.returnRate != null ? `${r.returnRate.toFixed(0)}%` : "—"}
+              </span>
+              <span className="text-right" style={{ fontFamily: FONT_MONO, fontSize: 11 }}>
+                {(r.profitProb * 100).toFixed(0)}%
+              </span>
+              <span className="text-right" style={{ fontFamily: FONT_MONO, fontSize: 11 }}>
+                {(r.pNormal * 100).toFixed(0)}%
+              </span>
+              <span className="text-right" style={{ fontFamily: FONT_MONO, fontSize: 11 }}>
+                {hasRankData ? `${(r.pRainbow * 100).toFixed(0)}%` : "—"}
+              </span>
+              <span className="text-right" style={{ fontFamily: FONT_MONO, fontSize: 11 }}>
+                {hasRankData ? `${(r.pGoldPlus * 100).toFixed(0)}%` : "—"}
+              </span>
+              <span className="text-right" style={{ fontFamily: FONT_MONO, fontSize: 11 }}>
+                {hasRankData ? `${(r.pSilverPlus * 100).toFixed(0)}%` : "—"}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+      {!hasRankData && (
+        <div style={{ fontSize: 10, color: C.muted }}>
+          ※虹・金・銀・銅の確率はオリパ管理であたりに「枠」を設定すると表示されます
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------- STORE: manage ----------
+function StoreManage({ oripaList, logsById, addOripa, updateOripa, deleteOripa, clearLog }) {
+  const [expandedId, setExpandedId] = useState(null);
+
+  return (
+    <div className="flex flex-col gap-3">
+      {oripaList.map((o) => (
+        <OripaEditCard
+          key={o.id}
+          oripa={o}
+          fullLog={(logsById && logsById[o.id]) || []}
+          expanded={expandedId === o.id}
+          onToggle={() => setExpandedId(expandedId === o.id ? null : o.id)}
+          updateOripa={updateOripa}
+          deleteOripa={deleteOripa}
+          clearLog={clearLog}
+        />
+      ))}
+
+      {oripaList.length < MAX_ORIPA ? (
+        <button onClick={addOripa} className="press flex items-center justify-center gap-2 rounded-xl py-3" style={{ background: C.surfaceAlt2, border: `1px dashed ${C.gold}`, color: C.gold }}>
+          <Plus size={16} />
+          <span style={{ fontSize: 13, fontWeight: 700 }}>新しいオリパを追加</span>
+        </button>
+      ) : (
+        <div style={{ fontSize: 11, color: C.muted, textAlign: "center" }}>オリパは最大{MAX_ORIPA}種類まで登録できます</div>
+      )}
+    </div>
+  );
+}
+
+function DesignDashboard({ oripa }) {
+  const s = computeDesignStats(oripa);
+  const over = s.remaining < 0;
+  const rankNames = { rainbow: "虹枠", gold: "金枠", silver: "銀枠", bronze: "銅枠", other: "その他" };
+
+  return (
+    <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.surfaceAlt2, border: `1px solid ${C.gold}` }}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5" style={{ color: C.gold, fontSize: 12, fontWeight: 700 }}>
+          <Calculator size={13} />
+          <span>設計ダッシュボード</span>
+        </div>
+        {s.complete && (
+          <span style={{ fontSize: 10, color: C.mint, border: `1px solid ${C.mint}`, borderRadius: 999, padding: "2px 8px", fontWeight: 700 }}>
+            オリパ設計完了
+          </span>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <StatBlock label="総売上" value={yen(s.totalSales)} />
+        <StatBlock label="目標還元総額" value={yen(s.targetTotal)} color={C.gold} />
+        <StatBlock label="現在の景品封入額" value={yen(s.normalPrizeTotal)} />
+        <StatBlock label="最低保証総額" value={yen(s.guaranteeTotal)} />
+        <StatBlock label="ラストワン金額" value={yen(s.lastOneAmount)} />
+        <StatBlock label="現在の総還元額" value={yen(s.currentTotal)} color={C.mint} />
+      </div>
+
+      <div className="flex justify-between items-center pt-2" style={{ borderTop: `1px dashed ${C.line}` }}>
+        <span style={{ fontSize: 12, color: C.muted }}>現在の還元率(目標{s.targetRate || 0}%)</span>
+        <span style={{ fontFamily: FONT_MONO, fontSize: 15, fontWeight: 700, color: C.paper }}>
+          {s.currentRate != null ? `${s.currentRate.toFixed(1)}%` : "—"}
+        </span>
+      </div>
+
+      <div
+        className="rounded-lg px-3 py-2.5 text-center"
+        style={{
+          background: over ? "rgba(226,105,79,0.12)" : "rgba(111,207,143,0.12)",
+          border: `1px solid ${over ? C.coral : C.mint}`,
+          color: over ? C.coral : C.mint,
+        }}
+      >
+        <span style={{ fontSize: 13, fontWeight: 700 }}>
+          {s.targetTotal <= 0
+            ? "目標還元率と単価・総口数を設定してください"
+            : over
+            ? `目標還元額を${yen(Math.abs(s.remaining))}超過しています`
+            : `あと ${yen(s.remaining)} 分の景品が必要です`}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <StatBlock label="登録済み通常あたり数" value={`${s.winCount}口`} color={C.gold} />
+        <StatBlock label="ハズレ口数(残り口数)" value={`${s.hazureCount}口`} />
+      </div>
+      <div className="flex justify-between items-center">
+        <span style={{ fontSize: 12, color: C.muted }}>当選確率</span>
+        <span style={{ fontFamily: FONT_MONO, fontSize: 13 }}>
+          {s.winRate != null ? `${s.winRate.toFixed(1)}%${s.winRatePer ? `(約1/${s.winRatePer.toFixed(2)})` : ""}` : "—"}
+        </span>
+      </div>
+
+      {s.winCount > 0 && (
+        <div className="flex flex-col gap-1.5 pt-2" style={{ borderTop: `1px dashed ${C.line}` }}>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 2 }}>枠ごとの集計</div>
+          {RANK_KEYS.filter((k) => s.byRank[k].count > 0).map((k) => (
+            <div key={k} className="flex items-center justify-between rounded-lg px-3 py-1.5" style={{ background: C.surfaceAlt, border: `1px solid ${C.line}` }}>
+              <span style={{ fontSize: 12 }}>{rankNames[k]}</span>
+              <span style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.muted }}>
+                {s.byRank[k].count}個 ・ {yen(s.byRank[k].amount)} ・ {s.totalSlots ? `${((s.byRank[k].count / s.totalSlots) * 100).toFixed(1)}%` : "—"}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BulkImportPanel({ oripa, set, onDone }) {
+  const [text, setText] = useState("");
+  const [parsed, setParsed] = useState(null); // {items, detectedPrice, detectedSlots, detectedGuarantee}
+  const rankNames = { rainbow: "虹枠", gold: "金枠", silver: "銀枠", bronze: "銅枠", other: "その他" };
+
+  const runParse = () => {
+    if (!text.trim()) return;
+    setParsed(parseBulkOripaText(text));
+  };
+
+  const removeParsedItem = (id) => {
+    setParsed((p) => ({ ...p, items: p.items.filter((i) => i.id !== id) }));
+  };
+  const updateParsedCount = (id, count) => {
+    const n = Math.max(1, Number(count) || 1);
+    setParsed((p) => ({ ...p, items: p.items.map((i) => (i.id === id ? { ...i, count: n } : i)) }));
+  };
+  const updateParsedAmount = (id, amount) => {
+    setParsed((p) => ({ ...p, items: p.items.map((i) => (i.id === id ? { ...i, amount: Number(amount) || 0 } : i)) }));
+  };
+
+  const totalFromItems = (parsed ? parsed.items : []).reduce((a, i) => (i.isLastOne ? a : a + i.amount * i.count), 0);
+  const lastOneItem = parsed ? parsed.items.find((i) => i.isLastOne) : null;
+
+  const commit = () => {
+    if (!parsed || parsed.items.length === 0) return;
+    const newTiers = [];
+    parsed.items.forEach((i) => {
+      if (i.isLastOne) return;
+      for (let n = 0; n < i.count; n++) newTiers.push({ id: uid(), name: i.name, amount: i.amount, rank: i.rank });
+    });
+    set((o) => {
+      const next = { ...o, tiers: [...o.tiers, ...newTiers] };
+      if (lastOneItem) {
+        next.lastOne = { ...o.lastOne, enabled: true, name: o.lastOne.enabled ? o.lastOne.name : `${lastOneItem.name}(ラストワン)`, amount: lastOneItem.amount };
+      }
+      if (parsed.detectedPrice && !Number(o.price)) next.price = parsed.detectedPrice;
+      if (parsed.detectedSlots && !Number(o.totalSlots)) next.totalSlots = parsed.detectedSlots;
+      if (parsed.detectedGuarantee && !o.minGuarantee.enabled) {
+        next.minGuarantee = { ...o.minGuarantee, enabled: true, amount: parsed.detectedGuarantee };
+      }
+      return next;
+    });
+    setText("");
+    setParsed(null);
+    onDone();
+  };
+
+  return (
+    <div className="rounded-xl p-3 flex flex-col gap-3" style={{ background: C.surfaceAlt2, border: `1px solid ${C.gold}` }}>
+      <div style={{ fontSize: 11, color: C.muted }}>
+        景品リストのテキストをそのまま貼り付けてください(「・カード名:5.4万」「虹枠」のような見出し、タブ区切りの表などにある程度対応します)。解析結果は必ず内容を確認してから登録されます。
+      </div>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={6}
+        style={{ ...inputStyle, fontFamily: FONT_BODY, resize: "vertical" }}
+        placeholder={"例:\n○虹枠\n・151:5.4万\n・アタッシュ:3万\n○金枠\n・ストームエメラルダ:1.7万×12"}
+      />
+      <button onClick={runParse} className="press rounded-lg py-2" style={{ background: C.gold, color: C.ink, fontWeight: 700, fontSize: 13 }}>
+        解析する
+      </button>
+
+      {parsed && (
+        <div className="flex flex-col gap-2">
+          {(parsed.detectedPrice || parsed.detectedSlots || parsed.detectedGuarantee) && (
+            <div style={{ fontSize: 11, color: C.gold }}>
+              検出:
+              {parsed.detectedPrice ? ` 単価${yen(parsed.detectedPrice)}` : ""}
+              {parsed.detectedSlots ? ` ・総口数${parsed.detectedSlots}口` : ""}
+              {parsed.detectedGuarantee ? ` ・保証${yen(parsed.detectedGuarantee)}` : ""}
+              (未設定の項目のみ登録時に反映されます)
+            </div>
+          )}
+          {parsed.items.length === 0 ? (
+            <div style={{ fontSize: 12, color: C.coral, textAlign: "center", padding: "8px 0" }}>解析できる項目が見つかりませんでした</div>
+          ) : (
+            <>
+              <div style={{ fontSize: 11, color: C.muted }}>
+                {parsed.items.filter((i) => !i.isLastOne).length}件を検出(景品総額 {yen(totalFromItems)}
+                {lastOneItem ? ` ・ラストワン ${lastOneItem.name} ${yen(lastOneItem.amount)}` : ""})。内容を確認し、不要な行は削除してください。
+              </div>
+              <div className="flex flex-col gap-1.5" style={{ maxHeight: 260, overflowY: "auto" }}>
+                {parsed.items.map((i) => (
+                  <div key={i.id} className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+                    <div className="flex items-center gap-1.5 min-w-0" style={{ flex: 1 }}>
+                      {i.isLastOne ? (
+                        <Crown size={12} color={C.gold} />
+                      ) : i.rank ? (
+                        <span style={{ fontSize: 9, color: C.muted, border: `1px solid ${C.line}`, borderRadius: 999, padding: "0 5px", flexShrink: 0 }}>
+                          {rankNames[i.rank]}
+                        </span>
+                      ) : null}
+                      <span style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.name}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min="1"
+                        value={i.amount}
+                        onChange={(e) => updateParsedAmount(i.id, e.target.value)}
+                        style={{ ...inputStyle, width: 74, padding: "5px 6px", fontSize: 11 }}
+                        title="金額"
+                      />
+                      {!i.isLastOne && (
+                        <>
+                          <span style={{ fontSize: 10, color: C.muted }}>×</span>
+                          <input
+                            type="number"
+                            inputMode="numeric"
+                            min="1"
+                            value={i.count}
+                            onChange={(e) => updateParsedCount(i.id, e.target.value)}
+                            style={{ ...inputStyle, width: 42, padding: "5px 6px", fontSize: 11, textAlign: "center" }}
+                            title="個数"
+                          />
+                        </>
+                      )}
+                      <button onClick={() => removeParsedItem(i.id)}>
+                        <X size={13} color={C.muted} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <button onClick={commit} className="press rounded-lg py-2.5" style={{ background: C.mint, color: C.ink, fontWeight: 700, fontSize: 13 }}>
+                この内容をオリパに追加する
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, deleteOripa, clearLog }) {
+  const [newTierName, setNewTierName] = useState("");
+  const [newTierAmount, setNewTierAmount] = useState("");
+  const [newTierRank, setNewTierRank] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
+
+  const set = (updater) => updateOripa(oripa.id, updater);
+
+  const addTier = () => {
+    if (!newTierName.trim() || newTierAmount === "") return;
+    set((o) => ({
+      ...o,
+      tiers: [...o.tiers, { id: uid(), name: newTierName.trim(), amount: Number(newTierAmount) || 0, rank: newTierRank || null }],
+    }));
+    setNewTierName("");
+    setNewTierAmount("");
+  };
+  const removeTier = (id) => set((o) => ({ ...o, tiers: o.tiers.filter((t) => t.id !== id) }));
+
+  const rate = oripa.totalSlots ? ((oripa.tiers.length / Number(oripa.totalSlots)) * 100).toFixed(1) : null;
+  const rankColor = { rainbow: C.gold, gold: "#D4A94A", silver: "#B8C0CC", bronze: "#B08D57" };
+
+  const box = useMemo(() => computeBoxState(fullLog || [], oripa), [fullLog, oripa]);
+  const remainingWinTotal = box.remainingPrizeAmount + box.lastOneRemainingValue;
+
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+      <button onClick={onToggle} className="press w-full flex items-center justify-between px-4 py-3">
+        <div className="text-left">
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15 }}>{oripa.name}</div>
+          <div style={{ fontSize: 11, color: C.muted }}>
+            {yen(oripa.price)} / 回 ・ {oripa.tiers.length}種のあたり{rate ? ` ・ ${rate}%` : ""}
+          </div>
+          <div style={{ fontSize: 11, color: C.mint, marginTop: 2 }}>残りのあたり額合計 {yen(remainingWinTotal)}</div>
+        </div>
+        <ChevronRight size={16} color={C.muted} style={{ transform: expanded ? "rotate(90deg)" : "none", transition: "transform .15s" }} />
+      </button>
+
+      {expanded && (
+        <div className="px-4 pb-4 flex flex-col gap-4" style={{ borderTop: `1px solid ${C.line}` }}>
+          <div
+            className="rounded-lg px-3 py-2.5 flex items-center justify-between mt-4"
+            style={{ background: "rgba(111,207,143,0.12)", border: `1px solid ${C.mint}` }}
+          >
+            <span style={{ fontSize: 12, color: C.mint, display: "flex", alignItems: "center", gap: 6 }}>
+              <Sparkles size={13} />
+              残りのあたり額の合計({box.remainingTiers.length}種{box.lastOneAwarded ? "" : oripa.lastOne.enabled ? "+ラストワン" : ""})
+            </span>
+            <span style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 16, color: C.mint }}>{yen(remainingWinTotal)}</span>
+          </div>
+          <div>
+            <label style={labelStyle}>オリパ名</label>
+            <input value={oripa.name} onChange={(e) => set((o) => ({ ...o, name: e.target.value }))} style={{ ...inputStyle, fontFamily: FONT_BODY }} />
+          </div>
+          <div>
+            <label style={labelStyle}>単価(1回あたり・円)</label>
+            <input type="number" inputMode="numeric" value={oripa.price} onChange={(e) => set((o) => ({ ...o, price: e.target.value }))} style={inputStyle} placeholder="例: 1000" />
+          </div>
+          <div>
+            <label style={labelStyle}>総口数(箱全体の回数)</label>
+            <input type="number" inputMode="numeric" value={oripa.totalSlots} onChange={(e) => set((o) => ({ ...o, totalSlots: e.target.value }))} style={inputStyle} placeholder="例: 100" />
+          </div>
+          <div>
+            <label style={labelStyle}>目標還元率(%)</label>
+            <input
+              type="number"
+              inputMode="numeric"
+              value={oripa.minGuarantee.targetRate ?? ""}
+              onChange={(e) => set((o) => ({ ...o, minGuarantee: { ...o.minGuarantee, targetRate: e.target.value } }))}
+              style={inputStyle}
+              placeholder="例: 85"
+            />
+          </div>
+
+          <DesignDashboard oripa={oripa} />
+
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <ListPlus size={14} color={C.gold} />
+              <span style={{ fontSize: 13, fontWeight: 700 }}>あたり金額</span>
+            </div>
+            <div className="flex gap-2">
+              <input value={newTierName} onChange={(e) => setNewTierName(e.target.value)} placeholder="名前(例: A賞)" style={{ ...inputStyle, fontFamily: FONT_BODY, flex: 2 }} />
+              <input type="number" inputMode="numeric" value={newTierAmount} onChange={(e) => setNewTierAmount(e.target.value)} placeholder="金額" style={{ ...inputStyle, flex: 1 }} />
+            </div>
+            <div className="flex gap-2">
+              <select value={newTierRank} onChange={(e) => setNewTierRank(e.target.value)} style={{ ...inputStyle, fontFamily: FONT_BODY, flex: 1 }}>
+                <option value="">枠なし</option>
+                <option value="rainbow">虹枠</option>
+                <option value="gold">金枠</option>
+                <option value="silver">銀枠</option>
+                <option value="bronze">銅枠</option>
+                <option value="other">その他</option>
+              </select>
+              <button onClick={addTier} className="press flex items-center justify-center rounded-lg" style={{ background: C.gold, color: C.ink, width: 42 }}>
+                <Plus size={18} />
+              </button>
+            </div>
+
+            <button
+              onClick={() => setBulkOpen((v) => !v)}
+              className="press flex items-center justify-center gap-1.5 rounded-lg py-2"
+              style={{ border: `1px dashed ${C.gold}`, color: C.gold, fontSize: 12, fontWeight: 700 }}
+            >
+              <ClipboardPaste size={13} />
+              {bulkOpen ? "一括登録を閉じる" : "テキストで一括登録(ベータ)"}
+            </button>
+            {bulkOpen && <BulkImportPanel oripa={oripa} set={set} onDone={() => setBulkOpen(false)} />}
+
+            {oripa.tiers.length > 0 && (
+              <div className="flex flex-col gap-2">
+                {oripa.tiers.map((t) => (
+                  <div key={t.id} className="flex items-center justify-between rounded-lg px-3 py-2" style={{ background: C.surfaceAlt, border: `1px solid ${C.line}` }}>
+                    <div className="flex items-center gap-2">
+                      {t.rank && (
+                        <span
+                          style={{
+                            fontSize: 10,
+                            color: rankColor[t.rank],
+                            border: `1px solid ${rankColor[t.rank]}`,
+                            borderRadius: 999,
+                            padding: "1px 6px",
+                            flexShrink: 0,
+                          }}
+                        >
+                          {RANK_LABEL[t.rank]}
+                        </span>
+                      )}
+                      <span style={{ fontSize: 13 }}>{t.name}</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span style={{ fontFamily: FONT_MONO, fontWeight: 700, color: C.gold, fontSize: 14 }}>{yen(t.amount)}</span>
+                      <button onClick={() => removeTier(t.id)}>
+                        <Trash2 size={15} color={C.muted} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-3 rounded-lg p-3" style={{ background: C.surfaceAlt2 }}>
+            <div className="flex items-center justify-between">
+              <span style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+                <Crown size={14} color={C.gold} /> ラストワン賞
+              </span>
+              <Toggle checked={oripa.lastOne.enabled} onChange={(v) => set((o) => ({ ...o, lastOne: { ...o.lastOne, enabled: v } }))} />
+            </div>
+            {oripa.lastOne.enabled && (
+              <div className="flex gap-2">
+                <input
+                  value={oripa.lastOne.name}
+                  onChange={(e) => set((o) => ({ ...o, lastOne: { ...o.lastOne, name: e.target.value } }))}
+                  placeholder="名前"
+                  style={{ ...inputStyle, fontFamily: FONT_BODY, flex: 2 }}
+                />
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  value={oripa.lastOne.amount}
+                  onChange={(e) => set((o) => ({ ...o, lastOne: { ...o.lastOne, amount: e.target.value } }))}
+                  placeholder="金額"
+                  style={{ ...inputStyle, flex: 1 }}
+                />
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-3 rounded-lg p-3" style={{ background: C.surfaceAlt2 }}>
+            <div className="flex items-center justify-between">
+              <span style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+                <ShieldCheck size={14} color={C.muted} /> 最低保証金額(はずれ)
+              </span>
+              <Toggle checked={oripa.minGuarantee.enabled} onChange={(v) => set((o) => ({ ...o, minGuarantee: { ...o.minGuarantee, enabled: v } }))} />
+            </div>
+            {oripa.minGuarantee.enabled && (
+              <>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  value={oripa.minGuarantee.amount}
+                  onChange={(e) => set((o) => ({ ...o, minGuarantee: { ...o.minGuarantee, amount: e.target.value } }))}
+                  placeholder="例: 100"
+                  style={inputStyle}
+                />
+                <div className="flex items-center justify-between">
+                  <span style={{ fontSize: 12, color: C.muted }}>適用範囲</span>
+                  <div className="flex rounded-lg overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+                    <button
+                      onClick={() => set((o) => ({ ...o, minGuarantee: { ...o.minGuarantee, applyToAll: false } }))}
+                      className="press px-3 py-1.5"
+                      style={{
+                        background: !oripa.minGuarantee.applyToAll ? C.gold : "transparent",
+                        color: !oripa.minGuarantee.applyToAll ? C.ink : C.muted,
+                        fontSize: 12,
+                        fontWeight: 700,
+                      }}
+                    >
+                      ハズレのみ
+                    </button>
+                    <button
+                      onClick={() => set((o) => ({ ...o, minGuarantee: { ...o.minGuarantee, applyToAll: true } }))}
+                      className="press px-3 py-1.5"
+                      style={{
+                        background: oripa.minGuarantee.applyToAll ? C.gold : "transparent",
+                        color: oripa.minGuarantee.applyToAll ? C.ink : C.muted,
+                        fontSize: 12,
+                        fontWeight: 700,
+                      }}
+                    >
+                      全口
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div>
+            <div className="flex items-center gap-1.5 mb-2" style={{ color: C.muted, fontSize: 11 }}>
+              <PercentCircle size={12} />
+              <span>封入率表(箱全体)</span>
+            </div>
+            {Number(oripa.totalSlots) ? <RateTable rows={configuredRateRows(oripa)} /> : <div style={{ fontSize: 12, color: C.muted }}>総口数を設定すると表示されます</div>}
+          </div>
+
+          <div className="flex flex-col gap-2 pt-2" style={{ borderTop: `1px dashed ${C.line}` }}>
+            {!confirmClear ? (
+              <button onClick={() => setConfirmClear(true)} className="press flex items-center justify-center gap-1.5 py-2.5 rounded-lg" style={{ border: `1px solid ${C.line}`, color: C.muted, fontSize: 12 }}>
+                <RotateCcw size={13} />
+                この箱をリセット(新しい箱にする)
+              </button>
+            ) : (
+              <div className="flex gap-2">
+                <button onClick={() => setConfirmClear(false)} className="press flex-1 py-2 rounded-lg" style={{ border: `1px solid ${C.line}`, color: C.paper, fontSize: 12 }}>
+                  キャンセル
+                </button>
+                <button
+                  onClick={() => {
+                    clearLog(oripa.id);
+                    setConfirmClear(false);
+                  }}
+                  className="press flex-1 py-2 rounded-lg"
+                  style={{ background: C.coral, color: C.ink, fontSize: 12, fontWeight: 700 }}
+                >
+                  リセットする
+                </button>
+              </div>
+            )}
+
+            {!confirmDelete ? (
+              <button onClick={() => setConfirmDelete(true)} className="press flex items-center justify-center gap-1.5 py-2.5 rounded-lg" style={{ border: `1px solid ${C.coral}`, color: C.coral, fontSize: 12 }}>
+                <Trash2 size={13} />
+                このオリパを削除
+              </button>
+            ) : (
+              <div className="flex gap-2">
+                <button onClick={() => setConfirmDelete(false)} className="press flex-1 py-2 rounded-lg" style={{ border: `1px solid ${C.line}`, color: C.paper, fontSize: 12 }}>
+                  キャンセル
+                </button>
+                <button onClick={() => deleteOripa(oripa.id)} className="press flex-1 py-2 rounded-lg" style={{ background: C.coral, color: C.ink, fontSize: 12, fontWeight: 700 }}>
+                  削除する
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ---------- mount ----------
+const __root = ReactDOM.createRoot(document.getElementById("root"));
+__root.render(<OripaCalculator />);
+
+</script>
+</body>
+</html>
