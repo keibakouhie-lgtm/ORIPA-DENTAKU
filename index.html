@@ -11,15 +11,15 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
 <style>
-  :root { color-scheme: light; box-sizing: border-box; }
+  :root { color-scheme: dark; box-sizing: border-box; }
   * { box-sizing: border-box; }
-  html, body { height: 100%; background: #FBFAF5; margin: 0; }
+  html, body { height: 100%; background: #12151C; margin: 0; }
   #root { min-height: 100%; }
 </style>
 </head>
 <body>
 <div id="root">
-  <div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#7A7E8A;font-family:sans-serif;font-size:13px;">
+  <div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#8B93A3;font-family:sans-serif;font-size:13px;">
     読み込み中...
   </div>
 </div>
@@ -317,16 +317,16 @@ const ClipboardPaste = makeIcon(
 
 // ---------- design tokens ----------
 const C = {
-  ink: "#FBFAF5",         // page background (was near-black)
-  surface: "#FFFFFF",     // card background
-  surfaceAlt: "#F5F2EA",  // secondary card / input
-  surfaceAlt2: "#EDE9DC", // tertiary
-  gold: "#B8862F",        // primary accent (deeper for contrast on white)
-  coral: "#C1554A",       // loss / danger
-  mint: "#4E8A63",        // profit / success
-  paper: "#1C1F26",       // primary text color
-  muted: "#7A7E8A",       // secondary text
-  line: "#DED9C7",        // borders / dividers
+  ink: "#12151C",
+  surface: "#1B2029",
+  surfaceAlt: "#232936",
+  surfaceAlt2: "#2A3140",
+  gold: "#E8B94B",
+  coral: "#E2694F",
+  mint: "#6FCF8F",
+  paper: "#F3F0E6",
+  muted: "#8B93A3",
+  line: "#333B4A",
 };
 
 const FONT_DISPLAY = "'Shippori Mincho', serif";
@@ -1751,7 +1751,7 @@ function RecordPanel({ oripa, stats, diffColor, box, nextIsLastOne, recordDraw, 
                 fontFamily: FONT_DISPLAY,
                 fontWeight: 800,
                 fontSize: stamp === "lastone" ? 12 : 15,
-                background: "rgba(255,255,255,0.94)",
+                background: "rgba(18,21,28,0.9)",
                 textAlign: "center",
                 lineHeight: 1.15,
               }}
@@ -1812,7 +1812,7 @@ function RecordPanel({ oripa, stats, diffColor, box, nextIsLastOne, recordDraw, 
       </div>
 
       {nextIsLastOne && (
-        <div className="rounded-xl px-4 py-3 flex items-center gap-2" style={{ background: "rgba(184,134,47,0.10)", border: `1px solid ${C.gold}`, color: C.gold }}>
+        <div className="rounded-xl px-4 py-3 flex items-center gap-2" style={{ background: "rgba(232,185,75,0.12)", border: `1px solid ${C.gold}`, color: C.gold }}>
           <Crown size={16} />
           <span style={{ fontSize: 12, fontWeight: 700 }}>
             次で最後の1回！{oripa.lastOne.name || "ラストワン賞"}({yen(oripa.lastOne.amount)})が確定でもらえます
@@ -3284,7 +3284,7 @@ function DesignDashboard({ oripa }) {
       <div
         className="rounded-lg px-3 py-2.5 text-center"
         style={{
-          background: over ? "rgba(193,85,74,0.10)" : "rgba(78,138,99,0.10)",
+          background: over ? "rgba(226,105,79,0.12)" : "rgba(111,207,143,0.12)",
           border: `1px solid ${over ? C.coral : C.mint}`,
           color: over ? C.coral : C.mint,
         }}
@@ -3508,7 +3508,7 @@ function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, delete
         <div className="px-4 pb-4 flex flex-col gap-4" style={{ borderTop: `1px solid ${C.line}` }}>
           <div
             className="rounded-lg px-3 py-2.5 flex items-center justify-between mt-4"
-            style={{ background: "rgba(78,138,99,0.10)", border: `1px solid ${C.mint}` }}
+            style={{ background: "rgba(111,207,143,0.12)", border: `1px solid ${C.mint}` }}
           >
             <span style={{ fontSize: 12, color: C.mint, display: "flex", alignItems: "center", gap: 6 }}>
               <Sparkles size={13} />
