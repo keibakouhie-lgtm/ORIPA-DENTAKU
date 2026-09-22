@@ -2222,6 +2222,8 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, startSessio
     setName("");
     setIsForeign(false);
     setShowDetails(false);
+    setHiddenRevealed(false);
+    setHiddenTapCount(0);
     setShowSuggestions(false);
     setFormOpen(false);
   };
@@ -2229,7 +2231,18 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, startSessio
   return (
     <div className="flex flex-col gap-4">
       {!formOpen ? (
-        <button onClick={() => setFormOpen(true)} className="press flex items-center justify-center gap-2 rounded-xl py-3" style={{ background: C.gold, color: C.ink, fontWeight: 700 }}>
+        <button
+          onClick={() => {
+            // reset per-customer state so hidden panel starts closed every time
+            setShowDetails(false);
+            setHiddenRevealed(false);
+            setHiddenTapCount(0);
+            setIsForeign(false);
+            setFormOpen(true);
+          }}
+          className="press flex items-center justify-center gap-2 rounded-xl py-3"
+          style={{ background: C.gold, color: C.ink, fontWeight: 700 }}
+        >
           <UserPlus size={16} />
           お客様を追加
         </button>
@@ -2337,7 +2350,17 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, startSessio
             />
           )}
           <div className="flex gap-2">
-            <button onClick={() => setFormOpen(false)} className="press flex-1 py-2 rounded-lg" style={{ border: `1px solid ${C.line}`, color: C.paper, fontSize: 13 }}>
+            <button
+              onClick={() => {
+                setFormOpen(false);
+                setIsForeign(false);
+                setShowDetails(false);
+                setHiddenRevealed(false);
+                setHiddenTapCount(0);
+              }}
+              className="press flex-1 py-2 rounded-lg"
+              style={{ border: `1px solid ${C.line}`, color: C.paper, fontSize: 13 }}
+            >
               キャンセル
             </button>
             <button onClick={submit} className="press flex-1 py-2 rounded-lg" style={{ background: C.gold, color: C.ink, fontSize: 13, fontWeight: 700 }}>
