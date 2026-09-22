@@ -1445,7 +1445,7 @@ function OripaCalculator() {
     // orphan sessions keep their historical customerName; don't delete them.
   };
 
-  const startSession = (customerName, oripaId, isForeign) => {
+  const startSession = (customerName, oripaId, isForeign, showDetails) => {
     const trimmed = (customerName || "").trim();
     if (!trimmed || !oripaId) return;
     const oripa = oripaList.find((o) => o.id === oripaId);
@@ -1468,6 +1468,7 @@ function OripaCalculator() {
       oripaId: oripa.id,
       oripaName: oripa.name,
       isForeign: !!isForeign,
+      showDetails: !!showDetails,
       startTs: now,
       endTs: null,
     };
@@ -2184,6 +2185,19 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, startSessio
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [oripaId, setOripaId] = useState("");
   const [isForeign, setIsForeign] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
+  const [hiddenRevealed, setHiddenRevealed] = useState(false);
+  const [hiddenTapCount, setHiddenTapCount] = useState(0);
+  const tapHidden = () => {
+    if (hiddenRevealed) return;
+    const next = hiddenTapCount + 1;
+    if (next >= 5) {
+      setHiddenRevealed(true);
+      setHiddenTapCount(0);
+    } else {
+      setHiddenTapCount(next);
+    }
+  };
 
   useEffect(() => {
     if (!oripaId && oripaList.length) setOripaId(oripaList[0].id);
@@ -2204,9 +2218,10 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, startSessio
 
   const submit = () => {
     if (!name.trim() || !oripaId) return;
-    startSession(name, oripaId, isForeign);
+    startSession(name, oripaId, isForeign, showDetails);
     setName("");
     setIsForeign(false);
+    setShowDetails(false);
     setShowSuggestions(false);
     setFormOpen(false);
   };
@@ -2292,6 +2307,35 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, startSessio
               ))}
             </div>
           </div>
+
+          {/* hidden staff-only toggle: tap the tiny dot to unlock */}
+          {hiddenRevealed ? (
+            <div
+              className="rounded-lg px-3 py-2.5 flex items-center justify-between"
+              style={{ background: C.surfaceAlt2, border: `1px dashed ${C.gold}` }}
+            >
+              <div className="flex flex-col">
+                <span style={{ fontSize: 12, fontWeight: 700, color: C.gold }}>詳細情報を表示</span>
+                <span style={{ fontSize: 10, color: C.muted }}>当選確率・封入額など(店舗側のみ)</span>
+              </div>
+              <Toggle checked={showDetails} onChange={setShowDetails} />
+            </div>
+          ) : (
+            <button
+              onClick={tapHidden}
+              className="press"
+              style={{
+                alignSelf: "flex-end",
+                width: 16,
+                height: 16,
+                borderRadius: 999,
+                background: hiddenTapCount > 0 ? C.gold : C.surfaceAlt2,
+                opacity: hiddenTapCount > 0 ? 0.6 : 0.3,
+                border: "none",
+              }}
+              aria-label="staff"
+            />
+          )}
           <div className="flex gap-2">
             <button onClick={() => setFormOpen(false)} className="press flex-1 py-2 rounded-lg" style={{ border: `1px solid ${C.line}`, color: C.paper, fontSize: 13 }}>
               キャンセル
@@ -2467,7 +2511,7 @@ function SessionCard({ session, oripa, fullLog, onDraw, onWin, onHazure, onEnd, 
         </button>
       </div>
 
-      {Number(oripa.totalSlots) > 0 && (
+      {Number(oripa.totalSlots) > 0 && !!session.showDetails && (
         <div className="rounded-lg px-3 py-2 flex flex-col gap-1.5" style={{ background: C.surfaceAlt2, border: `1px solid ${C.line}` }}>
           <div className="flex items-center justify-between">
             <span style={{ fontSize: 11, color: C.muted }}>全体の当選確率</span>
@@ -3799,42 +3843,104 @@ function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, delete
             </button>
             {bulkOpen && <BulkImportPanel oripa={oripa} set={set} onDone={() => setBulkOpen(false)} />}
 
-            {oripa.tiers.length > 0 && (
-              <div className="flex flex-col gap-2">
-                {oripa.tiers.map((t) => (
-                  <div key={t.id} className="flex items-center justify-between rounded-lg px-3 py-2" style={{ background: C.surfaceAlt, border: `1px solid ${C.line}` }}>
-                    <div className="flex items-center gap-2">
-                      {t.rank && (
-                        <span
+            {oripa.tiers.length > 0 && (() => {
+              const winByTierId = {};
+              (fullLog || []).forEach((e) => {
+                if (e.type === "win" && e.tierId) winByTierId[e.tierId] = e;
+              });
+              const consumedCount = oripa.tiers.filter((t) => winByTierId[t.id]).length;
+              const fmtTime = (ts) => {
+                const d = new Date(ts);
+                const m = String(d.getMonth() + 1);
+                const day = String(d.getDate());
+                return `${m}/${day} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+              };
+              return (
+                <>
+                  <div className="flex items-center justify-between px-1" style={{ fontSize: 11, color: C.muted }}>
+                    <span>あたり一覧({oripa.tiers.length}種)</span>
+                    <span>{consumedCount > 0 ? `${consumedCount}種が当選済み` : "未当選"}</span>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {oripa.tiers.map((t) => {
+                      const win = winByTierId[t.id];
+                      const isConsumed = !!win;
+                      return (
+                        <div
+                          key={t.id}
+                          className="flex items-center justify-between rounded-lg px-3 py-2"
                           style={{
-                            fontSize: 10,
-                            color: rankColor[t.rank],
-                            border: `1px solid ${rankColor[t.rank]}`,
-                            borderRadius: 999,
-                            padding: "1px 6px",
-                            flexShrink: 0,
+                            background: isConsumed ? C.surfaceAlt2 : C.surfaceAlt,
+                            border: `1px solid ${isConsumed ? C.coral : C.line}`,
+                            opacity: isConsumed ? 0.65 : 1,
                           }}
                         >
-                          {RANK_LABEL[t.rank]}
-                        </span>
-                      )}
-                      <span style={{ fontSize: 13 }}>{t.name}</span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <div className="flex flex-col items-end">
-                        <span style={{ fontFamily: FONT_MONO, fontWeight: 700, color: C.gold, fontSize: 14 }}>{yen(t.amount)}</span>
-                        {t.amountForeign != null && t.amountForeign !== "" && (
-                          <span style={{ fontFamily: FONT_MONO, fontSize: 10, color: C.muted }}>外 {yen(t.amountForeign)}</span>
-                        )}
-                      </div>
-                      <button onClick={() => removeTier(t.id)}>
-                        <Trash2 size={15} color={C.muted} />
-                      </button>
-                    </div>
+                          <div className="flex items-center gap-2 min-w-0" style={{ flex: 1 }}>
+                            {t.rank && (
+                              <span
+                                style={{
+                                  fontSize: 10,
+                                  color: rankColor[t.rank],
+                                  border: `1px solid ${rankColor[t.rank]}`,
+                                  borderRadius: 999,
+                                  padding: "1px 6px",
+                                  flexShrink: 0,
+                                  opacity: isConsumed ? 0.7 : 1,
+                                }}
+                              >
+                                {RANK_LABEL[t.rank]}
+                              </span>
+                            )}
+                            <div className="flex flex-col min-w-0">
+                              <span
+                                style={{
+                                  fontSize: 13,
+                                  textDecoration: isConsumed ? "line-through" : "none",
+                                  color: isConsumed ? C.muted : C.paper,
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {t.name}
+                              </span>
+                              {isConsumed && (
+                                <span style={{ fontSize: 9, color: C.coral, fontFamily: FONT_MONO }}>
+                                  当選済 {fmtTime(win.ts)}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <div className="flex flex-col items-end">
+                              <span
+                                style={{
+                                  fontFamily: FONT_MONO,
+                                  fontWeight: 700,
+                                  color: isConsumed ? C.muted : C.gold,
+                                  fontSize: 14,
+                                  textDecoration: isConsumed ? "line-through" : "none",
+                                }}
+                              >
+                                {yen(t.amount)}
+                              </span>
+                              {t.amountForeign != null && t.amountForeign !== "" && (
+                                <span style={{ fontFamily: FONT_MONO, fontSize: 10, color: C.muted, textDecoration: isConsumed ? "line-through" : "none" }}>
+                                  外 {yen(t.amountForeign)}
+                                </span>
+                              )}
+                            </div>
+                            <button onClick={() => removeTier(t.id)}>
+                              <Trash2 size={15} color={C.muted} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                ))}
-              </div>
-            )}
+                </>
+              );
+            })()}
           </div>
 
           <div className="flex flex-col gap-3 rounded-lg p-3" style={{ background: C.surfaceAlt2 }}>
