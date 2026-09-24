@@ -935,6 +935,40 @@ function computeBoxState(fullLog, oripa) {
 }
 
 // ---------- date helpers ----------
+function haversineMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+// Return biweekly period start (Monday) covering the given date, anchored at 2024-01-01 (Monday).
+function biweeklyPeriodStart(dateKey) {
+  const anchor = new Date("2024-01-01T00:00:00");
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const target = new Date(y, m - 1, d);
+  const daysSinceAnchor = Math.floor((target - anchor) / 86400000);
+  const periodIndex = Math.floor(daysSinceAnchor / 14);
+  const start = new Date(anchor.getTime() + periodIndex * 14 * 86400000);
+  return dateKeyOf(start.getTime());
+}
+function addDays(dateKey, n) {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const t = new Date(y, m - 1, d);
+  t.setDate(t.getDate() + n);
+  return dateKeyOf(t.getTime());
+}
+function biweeklyDates(periodStart) {
+  return Array.from({ length: 14 }, (_, i) => addDays(periodStart, i));
+}
+function fmtDateKey(dateKey) {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  const dow = ["日", "月", "火", "水", "木", "金", "土"][dt.getDay()];
+  return `${m}/${d}(${dow})`;
+}
 function dateKeyOf(ts) {
   const d = new Date(ts);
   const y = d.getFullYear();
@@ -1232,6 +1266,16 @@ function OripaCalculator() {
   const [sessions, setSessions] = useState([]);
   const [settlements, setSettlements] = useState([]);
 
+  // shift/timeclock state
+  const [staff, setStaff] = useState([]); // [{id, name, createdAt}]
+  const [shiftRequests, setShiftRequests] = useState([]); // [{id, staffId, staffName, periodStart(yyyy-mm-dd), entries: [{date, start, end, note}], submittedAt}]
+  const [confirmedShifts, setConfirmedShifts] = useState([]); // [{id, periodStart, entries: [{date, staffId, staffName, start, end, note}], publishedAt}]
+  const [timePunches, setTimePunches] = useState([]); // [{id, staffId, staffName, type: 'in'|'out', ts, lat, lng, byManager}]
+  const [storeGeo, setStoreGeo] = useState({ lat: null, lng: null, radiusM: 100, enabled: false });
+
+  // buyback list state
+  const [buybackItems, setBuybackItems] = useState([]); // [{id, category: 'pokemon'|'onepiece', name, price, updatedAt}]
+
   // ---- initial load ----
   useEffect(() => {
     (async () => {
@@ -1275,6 +1319,30 @@ function OripaCalculator() {
       try {
         const r = await window.storage.get("oripa:settlements", true);
         if (r && r.value) setSettlements(JSON.parse(r.value));
+      } catch (e) {}
+      try {
+        const r = await window.storage.get("oripa:staff", true);
+        if (r && r.value) setStaff(JSON.parse(r.value));
+      } catch (e) {}
+      try {
+        const r = await window.storage.get("oripa:shiftRequests", true);
+        if (r && r.value) setShiftRequests(JSON.parse(r.value));
+      } catch (e) {}
+      try {
+        const r = await window.storage.get("oripa:confirmedShifts", true);
+        if (r && r.value) setConfirmedShifts(JSON.parse(r.value));
+      } catch (e) {}
+      try {
+        const r = await window.storage.get("oripa:timePunches", true);
+        if (r && r.value) setTimePunches(JSON.parse(r.value));
+      } catch (e) {}
+      try {
+        const r = await window.storage.get("oripa:storeGeo", true);
+        if (r && r.value) setStoreGeo(JSON.parse(r.value));
+      } catch (e) {}
+      try {
+        const r = await window.storage.get("oripa:buyback", true);
+        if (r && r.value) setBuybackItems(JSON.parse(r.value));
       } catch (e) {}
       setLoaded(true);
     })();
@@ -1445,6 +1513,81 @@ function OripaCalculator() {
     // orphan sessions keep their historical customerName; don't delete them.
   };
 
+  // ---- shift / timeclock ----
+  const saveStaff = (list) => { setStaff(list); window.storage.set("oripa:staff", JSON.stringify(list), true).catch(() => {}); };
+  const saveShiftRequests = (list) => { setShiftRequests(list); window.storage.set("oripa:shiftRequests", JSON.stringify(list), true).catch(() => {}); };
+  const saveConfirmedShifts = (list) => { setConfirmedShifts(list); window.storage.set("oripa:confirmedShifts", JSON.stringify(list), true).catch(() => {}); };
+  const saveTimePunches = (list) => { setTimePunches(list); window.storage.set("oripa:timePunches", JSON.stringify(list), true).catch(() => {}); };
+  const saveStoreGeo = (obj) => { setStoreGeo(obj); window.storage.set("oripa:storeGeo", JSON.stringify(obj), true).catch(() => {}); };
+
+  const addStaff = (name) => {
+    const trimmed = (name || "").trim();
+    if (!trimmed) return;
+    if (staff.some((s) => s.name === trimmed)) return;
+    saveStaff([...staff, { id: uid(), name: trimmed, createdAt: Date.now() }]);
+  };
+  const updateStaff = (id, name) => saveStaff(staff.map((s) => (s.id === id ? { ...s, name } : s)));
+  const deleteStaff = (id) => saveStaff(staff.filter((s) => s.id !== id));
+
+  const submitShiftRequest = (staffName, periodStart, entries) => {
+    let member = staff.find((s) => s.name === staffName.trim());
+    if (!member) {
+      member = { id: uid(), name: staffName.trim(), createdAt: Date.now() };
+      saveStaff([...staff, member]);
+    }
+    const req = { id: uid(), staffId: member.id, staffName: member.name, periodStart, entries, submittedAt: Date.now() };
+    saveShiftRequests([...shiftRequests, req]);
+  };
+  const deleteShiftRequest = (id) => saveShiftRequests(shiftRequests.filter((r) => r.id !== id));
+
+  const publishConfirmedShift = (periodStart, entries) => {
+    // replace any existing confirmed shift for the same period
+    const rest = confirmedShifts.filter((c) => c.periodStart !== periodStart);
+    saveConfirmedShifts([...rest, { id: uid(), periodStart, entries, publishedAt: Date.now() }]);
+  };
+
+  const punch = async (staffMember, type) => {
+    // type: 'in' | 'out'
+    const doSave = (lat, lng, byManager = false) => {
+      const record = { id: uid(), staffId: staffMember.id, staffName: staffMember.name, type, ts: Date.now(), lat, lng, byManager };
+      saveTimePunches([...timePunches, record]);
+    };
+    if (!storeGeo.enabled || storeGeo.lat == null || storeGeo.lng == null) {
+      // no geofence -> allow punch, no coords
+      doSave(null, null);
+      return { ok: true };
+    }
+    try {
+      const pos = await new Promise((resolve, reject) => {
+        if (!navigator.geolocation) return reject(new Error("位置情報が使えません"));
+        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
+      });
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+      const dist = haversineMeters(lat, lng, storeGeo.lat, storeGeo.lng);
+      if (dist > (Number(storeGeo.radiusM) || 100)) {
+        return { ok: false, reason: `店舗から約${Math.round(dist)}m離れています` };
+      }
+      doSave(lat, lng);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, reason: "位置情報の取得に失敗しました" };
+    }
+  };
+  const managerPunch = (staffMember, type, ts) => {
+    const record = { id: uid(), staffId: staffMember.id, staffName: staffMember.name, type, ts: ts || Date.now(), lat: null, lng: null, byManager: true };
+    saveTimePunches([...timePunches, record]);
+  };
+  const deletePunch = (id) => saveTimePunches(timePunches.filter((p) => p.id !== id));
+
+  // ---- buyback ----
+  const saveBuyback = (list) => { setBuybackItems(list); window.storage.set("oripa:buyback", JSON.stringify(list), true).catch(() => {}); };
+  const addBuybackItem = (category, name, price) => {
+    saveBuyback([...buybackItems, { id: uid(), category, name: name.trim(), price: Number(price) || 0, updatedAt: Date.now() }]);
+  };
+  const updateBuybackItem = (id, patch) => saveBuyback(buybackItems.map((i) => (i.id === id ? { ...i, ...patch, updatedAt: Date.now() } : i)));
+  const deleteBuybackItem = (id) => saveBuyback(buybackItems.filter((i) => i.id !== id));
+
   const startSession = (customerName, oripaId, isForeign, showDetails) => {
     const trimmed = (customerName || "").trim();
     if (!trimmed || !oripaId) return;
@@ -1606,17 +1749,50 @@ function OripaCalculator() {
               updateSettlement={updateSettlement}
               updateCustomer={updateCustomer}
               deleteCustomer={deleteCustomer}
+              staff={staff}
+              addStaff={addStaff}
+              updateStaff={updateStaff}
+              deleteStaff={deleteStaff}
+              shiftRequests={shiftRequests}
+              deleteShiftRequest={deleteShiftRequest}
+              confirmedShifts={confirmedShifts}
+              publishConfirmedShift={publishConfirmedShift}
+              timePunches={timePunches}
+              managerPunch={managerPunch}
+              deletePunch={deletePunch}
+              storeGeo={storeGeo}
+              saveStoreGeo={saveStoreGeo}
+              buybackItems={buybackItems}
+              addBuybackItem={addBuybackItem}
+              updateBuybackItem={updateBuybackItem}
+              deleteBuybackItem={deleteBuybackItem}
               stamp={stamp}
             />
           ) : (
             <PasswordGate onUnlock={() => setStoreUnlocked(true)} />
           ))}
+
+        {navTab === "shift" && (
+          <StaffShift
+            staff={staff}
+            addStaff={addStaff}
+            shiftRequests={shiftRequests}
+            submitShiftRequest={submitShiftRequest}
+            confirmedShifts={confirmedShifts}
+            timePunches={timePunches}
+            punch={punch}
+            storeGeo={storeGeo}
+          />
+        )}
+        {navTab === "buyback" && <BuybackPublic items={buybackItems} />}
       </div>
 
       {/* bottom nav */}
       <div className="fixed bottom-0 left-0 right-0 flex justify-around items-stretch py-2" style={{ background: C.surface, borderTop: `1px solid ${C.line}` }}>
         <div className="max-w-md w-full mx-auto flex justify-around">
           <NavBtn icon={Users} label="営業中" active={navTab === "active"} onClick={() => setNavTab("active")} />
+          <NavBtn icon={CalendarCheck} label="シフト" active={navTab === "shift"} onClick={() => setNavTab("shift")} />
+          <NavBtn icon={ListPlus} label="買取表" active={navTab === "buyback"} onClick={() => setNavTab("buyback")} />
           <NavBtn icon={storeUnlocked ? LockOpen : Lock} label="店舗" active={navTab === "store"} onClick={() => setNavTab("store")} />
         </div>
       </div>
@@ -2109,12 +2285,31 @@ function StoreShell({
   updateSettlement,
   updateCustomer,
   deleteCustomer,
+  staff,
+  addStaff,
+  updateStaff,
+  deleteStaff,
+  shiftRequests,
+  deleteShiftRequest,
+  confirmedShifts,
+  publishConfirmedShift,
+  timePunches,
+  managerPunch,
+  deletePunch,
+  storeGeo,
+  saveStoreGeo,
+  buybackItems,
+  addBuybackItem,
+  updateBuybackItem,
+  deleteBuybackItem,
 }) {
   const tabs = [
     { key: "aggregate", label: "集計", icon: BarChart3 },
     { key: "manage", label: "オリパ管理", icon: Settings2 },
     { key: "customers", label: "お客様", icon: UserSearch },
     { key: "daily", label: "本日/精算", icon: CalendarCheck },
+    { key: "shift", label: "シフト・勤怠", icon: CalendarCheck },
+    { key: "buyback", label: "買取表", icon: ListPlus },
   ];
   return (
     <div className="flex flex-col gap-5">
@@ -2172,6 +2367,31 @@ function StoreShell({
           settlements={settlements}
           settleToday={settleToday}
           updateSettlement={updateSettlement}
+        />
+      )}
+      {storeSubTab === "shift" && (
+        <ShiftManage
+          staff={staff}
+          addStaff={addStaff}
+          updateStaff={updateStaff}
+          deleteStaff={deleteStaff}
+          shiftRequests={shiftRequests}
+          deleteShiftRequest={deleteShiftRequest}
+          confirmedShifts={confirmedShifts}
+          publishConfirmedShift={publishConfirmedShift}
+          timePunches={timePunches}
+          managerPunch={managerPunch}
+          deletePunch={deletePunch}
+          storeGeo={storeGeo}
+          saveStoreGeo={saveStoreGeo}
+        />
+      )}
+      {storeSubTab === "buyback" && (
+        <BuybackManage
+          items={buybackItems}
+          addItem={addBuybackItem}
+          updateItem={updateBuybackItem}
+          deleteItem={deleteBuybackItem}
         />
       )}
     </div>
@@ -4103,6 +4323,918 @@ function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, delete
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ============================================================
+// STAFF (public) SHIFT + TIMECLOCK
+// ============================================================
+function StaffShift({ staff, addStaff, shiftRequests, submitShiftRequest, confirmedShifts, timePunches, punch, storeGeo }) {
+  const [subTab, setSubTab] = useState("clock"); // clock | submit | view
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div>
+        <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17 }}>シフト・タイムカード</span>
+        <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>スタッフ用の希望シフト提出と、出退勤の打刻</div>
+      </div>
+      <div className="flex gap-2">
+        {[
+          ["clock", "打刻"],
+          ["submit", "希望提出"],
+          ["view", "確定シフト"],
+        ].map(([k, l]) => (
+          <button
+            key={k}
+            onClick={() => setSubTab(k)}
+            className="press flex-1 rounded-lg py-2"
+            style={{ background: subTab === k ? C.gold : C.surfaceAlt, color: subTab === k ? C.ink : C.muted, fontSize: 13, fontWeight: 700 }}
+          >
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {subTab === "clock" && (
+        <PunchClock staff={staff} addStaff={addStaff} timePunches={timePunches} punch={punch} storeGeo={storeGeo} />
+      )}
+      {subTab === "submit" && (
+        <ShiftSubmit staff={staff} shiftRequests={shiftRequests} submitShiftRequest={submitShiftRequest} />
+      )}
+      {subTab === "view" && <ConfirmedShiftView confirmedShifts={confirmedShifts} />}
+    </div>
+  );
+}
+
+function PunchClock({ staff, addStaff, timePunches, punch, storeGeo }) {
+  const [selectedName, setSelectedName] = useState("");
+  const [newName, setNewName] = useState("");
+  const [msg, setMsg] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const doPunch = async (type) => {
+    if (!selectedName) { setMsg({ ok: false, text: "名前を選択してください" }); return; }
+    const member = staff.find((s) => s.name === selectedName);
+    if (!member) { setMsg({ ok: false, text: "スタッフが見つかりません" }); return; }
+    setBusy(true);
+    setMsg(null);
+    const res = await punch(member, type);
+    setBusy(false);
+    if (res.ok) {
+      const now = new Date();
+      setMsg({ ok: true, text: `${type === "in" ? "出勤" : "退勤"} 打刻しました ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}` });
+    } else {
+      setMsg({ ok: false, text: res.reason || "打刻できませんでした" });
+    }
+  };
+
+  const myPunches = timePunches
+    .filter((p) => p.staffName === selectedName)
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, 8);
+
+  const fmt = (ts) => {
+    const d = new Date(ts);
+    return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+        <div>
+          <label style={labelStyle}>あなたの名前</label>
+          {staff.length === 0 ? (
+            <div style={{ fontSize: 12, color: C.muted, padding: "8px 0" }}>初回のため名前を登録してください。</div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              {staff.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => setSelectedName(s.name)}
+                  className="press rounded-lg py-2"
+                  style={{
+                    background: selectedName === s.name ? C.gold : C.surfaceAlt,
+                    color: selectedName === s.name ? C.ink : C.paper,
+                    fontSize: 13,
+                    fontWeight: 700,
+                    border: `1px solid ${selectedName === s.name ? C.gold : C.line}`,
+                  }}
+                >
+                  {s.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <div>
+          <label style={labelStyle}>名前が無ければ追加</label>
+          <div className="flex gap-2">
+            <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="スタッフ名" style={{ ...inputStyle, fontFamily: FONT_BODY }} />
+            <button
+              onClick={() => {
+                if (!newName.trim()) return;
+                addStaff(newName.trim());
+                setSelectedName(newName.trim());
+                setNewName("");
+              }}
+              className="press rounded-lg px-4"
+              style={{ background: C.gold, color: C.ink, fontWeight: 700, fontSize: 13 }}
+            >
+              追加
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <button
+          onClick={() => doPunch("in")}
+          disabled={busy}
+          className="press rounded-2xl py-6"
+          style={{ background: C.mint, color: C.ink, fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 22, opacity: busy ? 0.6 : 1 }}
+        >
+          出勤
+        </button>
+        <button
+          onClick={() => doPunch("out")}
+          disabled={busy}
+          className="press rounded-2xl py-6"
+          style={{ background: C.coral, color: C.ink, fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 22, opacity: busy ? 0.6 : 1 }}
+        >
+          退勤
+        </button>
+      </div>
+
+      {busy && <div style={{ fontSize: 12, color: C.muted, textAlign: "center" }}>位置情報を確認しています…</div>}
+
+      {msg && (
+        <div
+          className="rounded-xl px-3 py-2.5 text-center"
+          style={{
+            background: msg.ok ? "rgba(111,207,143,0.14)" : "rgba(226,105,79,0.14)",
+            border: `1px solid ${msg.ok ? C.mint : C.coral}`,
+            color: msg.ok ? C.mint : C.coral,
+            fontSize: 13,
+            fontWeight: 700,
+          }}
+        >
+          {msg.text}
+        </div>
+      )}
+
+      {storeGeo.enabled && (
+        <div style={{ fontSize: 11, color: C.muted, textAlign: "center" }}>
+          店舗から{storeGeo.radiusM || 100}m以内でのみ打刻できます
+        </div>
+      )}
+
+      {selectedName && myPunches.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <div style={{ fontSize: 12, color: C.muted }}>{selectedName} さんの直近の打刻</div>
+          {myPunches.map((p) => (
+            <div key={p.id} className="rounded-lg px-3 py-2 flex items-center justify-between" style={{ background: C.surfaceAlt, border: `1px solid ${C.line}` }}>
+              <span style={{ fontSize: 12 }}>
+                <span style={{ color: p.type === "in" ? C.mint : C.coral, fontWeight: 700, marginRight: 6 }}>{p.type === "in" ? "出勤" : "退勤"}</span>
+                {fmt(p.ts)}
+                {p.byManager && <span style={{ fontSize: 10, color: C.gold, marginLeft: 6 }}>(店長修正)</span>}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ShiftSubmit({ staff, shiftRequests, submitShiftRequest }) {
+  const [name, setName] = useState("");
+  const [periodStart, setPeriodStart] = useState(biweeklyPeriodStart(todayKey()));
+  const days = biweeklyDates(periodStart);
+  const [entries, setEntries] = useState(() => days.map((d) => ({ date: d, start: "", end: "", note: "" })));
+  const [submitted, setSubmitted] = useState(false);
+
+  useEffect(() => {
+    setEntries(biweeklyDates(periodStart).map((d) => ({ date: d, start: "", end: "", note: "" })));
+    setSubmitted(false);
+  }, [periodStart]);
+
+  const updEntry = (i, k, v) => setEntries((prev) => prev.map((e, ei) => (ei === i ? { ...e, [k]: v } : e)));
+
+  const canSubmit = name.trim() && entries.some((e) => e.start || e.end || e.note);
+
+  const submit = () => {
+    if (!canSubmit) return;
+    submitShiftRequest(name, periodStart, entries);
+    setSubmitted(true);
+    // clear form-ish
+    setEntries(days.map((d) => ({ date: d, start: "", end: "", note: "" })));
+  };
+
+  const myPastRequests = shiftRequests
+    .filter((r) => r.staffName === name.trim())
+    .sort((a, b) => b.submittedAt - a.submittedAt)
+    .slice(0, 3);
+
+  const shiftPeriod = (offset) => {
+    const cur = new Date(periodStart);
+    cur.setDate(cur.getDate() + offset * 14);
+    setPeriodStart(dateKeyOf(cur.getTime()));
+  };
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+        <div>
+          <label style={labelStyle}>あなたの名前</label>
+          {staff.length > 0 && (
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              {staff.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => setName(s.name)}
+                  className="press rounded-lg py-2"
+                  style={{
+                    background: name === s.name ? C.gold : C.surfaceAlt,
+                    color: name === s.name ? C.ink : C.paper,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    border: `1px solid ${name === s.name ? C.gold : C.line}`,
+                  }}
+                >
+                  {s.name}
+                </button>
+              ))}
+            </div>
+          )}
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="または直接入力" style={{ ...inputStyle, fontFamily: FONT_BODY }} />
+        </div>
+        <div>
+          <label style={labelStyle}>期間(2週間)</label>
+          <div className="flex items-center gap-2">
+            <button onClick={() => shiftPeriod(-1)} className="press rounded-lg px-3 py-2" style={{ background: C.surfaceAlt, color: C.paper, border: `1px solid ${C.line}` }}>◀</button>
+            <span style={{ flex: 1, textAlign: "center", fontFamily: FONT_MONO, fontSize: 13 }}>
+              {fmtDateKey(periodStart)} 〜 {fmtDateKey(addDays(periodStart, 13))}
+            </span>
+            <button onClick={() => shiftPeriod(1)} className="press rounded-lg px-3 py-2" style={{ background: C.surfaceAlt, color: C.paper, border: `1px solid ${C.line}` }}>▶</button>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        {entries.map((e, i) => (
+          <div key={e.date} className="rounded-lg p-3" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+            <div style={{ fontSize: 12, color: C.muted, fontWeight: 700, marginBottom: 6 }}>{fmtDateKey(e.date)}</div>
+            <div className="flex items-center gap-2">
+              <input
+                type="time"
+                value={e.start}
+                onChange={(ev) => updEntry(i, "start", ev.target.value)}
+                style={{ ...inputStyle, fontFamily: FONT_MONO, flex: 1, padding: "8px 10px" }}
+              />
+              <span style={{ fontSize: 12, color: C.muted }}>〜</span>
+              <input
+                type="time"
+                value={e.end}
+                onChange={(ev) => updEntry(i, "end", ev.target.value)}
+                style={{ ...inputStyle, fontFamily: FONT_MONO, flex: 1, padding: "8px 10px" }}
+              />
+            </div>
+            <input
+              value={e.note}
+              onChange={(ev) => updEntry(i, "note", ev.target.value)}
+              placeholder="メモ(休み希望など)"
+              style={{ ...inputStyle, fontFamily: FONT_BODY, marginTop: 6, padding: "6px 10px", fontSize: 12 }}
+            />
+          </div>
+        ))}
+      </div>
+
+      <button
+        onClick={submit}
+        disabled={!canSubmit}
+        className="press rounded-xl py-3"
+        style={{ background: canSubmit ? C.gold : C.surfaceAlt2, color: canSubmit ? C.ink : C.muted, fontWeight: 700, fontSize: 14 }}
+      >
+        希望シフトを提出
+      </button>
+
+      {submitted && (
+        <div className="rounded-xl px-3 py-2.5 text-center" style={{ background: "rgba(111,207,143,0.14)", border: `1px solid ${C.mint}`, color: C.mint, fontSize: 13, fontWeight: 700 }}>
+          提出しました。店長側で確認されます。
+        </div>
+      )}
+
+      {myPastRequests.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <div style={{ fontSize: 12, color: C.muted }}>{name} さんの過去の提出</div>
+          {myPastRequests.map((r) => (
+            <div key={r.id} className="rounded-lg px-3 py-2" style={{ background: C.surfaceAlt, border: `1px solid ${C.line}` }}>
+              <div style={{ fontSize: 12 }}>{fmtDateKey(r.periodStart)} 〜 {fmtDateKey(addDays(r.periodStart, 13))}</div>
+              <div style={{ fontSize: 10, color: C.muted, fontFamily: FONT_MONO }}>{new Date(r.submittedAt).toLocaleString("ja-JP")}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConfirmedShiftView({ confirmedShifts }) {
+  const sorted = [...confirmedShifts].sort((a, b) => b.publishedAt - a.publishedAt);
+  if (sorted.length === 0) {
+    return <div className="rounded-xl px-4 py-6 text-center" style={{ background: C.surface, border: `1px dashed ${C.line}`, color: C.muted, fontSize: 13 }}>まだ確定シフトはありません</div>;
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      {sorted.map((cs) => (
+        <ConfirmedShiftCard key={cs.id} confirmed={cs} />
+      ))}
+    </div>
+  );
+}
+function ConfirmedShiftCard({ confirmed }) {
+  const dates = biweeklyDates(confirmed.periodStart);
+  const byDate = {};
+  dates.forEach((d) => (byDate[d] = []));
+  (confirmed.entries || []).forEach((e) => { if (byDate[e.date]) byDate[e.date].push(e); });
+  return (
+    <div className="rounded-xl p-4 flex flex-col gap-2" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15 }}>{fmtDateKey(confirmed.periodStart)} 〜 {fmtDateKey(addDays(confirmed.periodStart, 13))}</div>
+      <div style={{ fontSize: 10, color: C.muted, fontFamily: FONT_MONO }}>発行: {new Date(confirmed.publishedAt).toLocaleString("ja-JP")}</div>
+      <div className="flex flex-col gap-1.5 mt-1">
+        {dates.map((d) => (
+          <div key={d} className="flex justify-between rounded-md px-2 py-1.5" style={{ background: C.surfaceAlt }}>
+            <span style={{ fontSize: 12, color: C.muted, fontFamily: FONT_MONO }}>{fmtDateKey(d)}</span>
+            <span style={{ fontSize: 12 }}>
+              {byDate[d].length === 0
+                ? <span style={{ color: C.muted }}>—</span>
+                : byDate[d].map((e, i) => (
+                    <span key={i} style={{ marginLeft: i > 0 ? 8 : 0 }}>
+                      <b>{e.staffName}</b> {e.start}-{e.end}
+                    </span>
+                  ))}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// STAFF (public) BUYBACK VIEW
+// ============================================================
+function BuybackPublic({ items }) {
+  const [cat, setCat] = useState("pokemon");
+  const [query, setQuery] = useState("");
+  const filtered = items
+    .filter((i) => i.category === cat)
+    .filter((i) => !query || i.name.toLowerCase().includes(query.toLowerCase()))
+    .sort((a, b) => b.price - a.price);
+
+  const copyForX = () => {
+    const top = filtered.slice(0, 20);
+    const lines = [`【${cat === "pokemon" ? "ポケモン" : "ワンピース"}買取表】`, ""];
+    top.forEach((i, idx) => {
+      lines.push(`${idx + 1}位 ${i.name} ¥${i.price.toLocaleString("ja-JP")}`);
+    });
+    const text = lines.join("\n");
+    if (navigator.clipboard) navigator.clipboard.writeText(text);
+    alert("上位20件をコピーしました");
+  };
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div>
+        <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17 }}>買取表</span>
+        <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>店内展示用・SNS投稿用</div>
+      </div>
+
+      <div className="flex gap-2">
+        {[
+          ["pokemon", "ポケモン"],
+          ["onepiece", "ワンピース"],
+        ].map(([k, l]) => (
+          <button
+            key={k}
+            onClick={() => setCat(k)}
+            className="press flex-1 rounded-lg py-2"
+            style={{ background: cat === k ? C.gold : C.surfaceAlt, color: cat === k ? C.ink : C.muted, fontSize: 13, fontWeight: 700 }}
+          >
+            {l}
+          </button>
+        ))}
+      </div>
+
+      <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="カード名で検索" style={{ ...inputStyle, fontFamily: FONT_BODY }} />
+
+      <button onClick={copyForX} className="press rounded-xl py-2" style={{ border: `1px solid ${C.gold}`, color: C.gold, fontSize: 12, fontWeight: 700 }}>
+        上位20件をX投稿用にコピー
+      </button>
+
+      <div className="flex flex-col gap-1.5">
+        {filtered.length === 0 ? (
+          <div className="rounded-xl px-4 py-8 text-center" style={{ background: C.surface, border: `1px dashed ${C.line}`, color: C.muted, fontSize: 13 }}>
+            {items.length === 0 ? "買取表が未登録です" : "該当するカードがありません"}
+          </div>
+        ) : (
+          filtered.map((i, idx) => (
+            <div key={i.id} className="flex items-center justify-between rounded-lg px-3 py-2.5" style={{ background: idx < 3 ? "rgba(232,185,75,0.10)" : C.surface, border: `1px solid ${idx < 3 ? C.gold : C.line}` }}>
+              <div className="flex items-center gap-2 min-w-0" style={{ flex: 1 }}>
+                <span style={{ fontFamily: FONT_MONO, fontWeight: 700, color: idx < 3 ? C.gold : C.muted, fontSize: 12, minWidth: 24, textAlign: "center" }}>{idx + 1}</span>
+                <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.name}</span>
+              </div>
+              <span style={{ fontFamily: FONT_MONO, fontWeight: 700, color: C.gold, fontSize: 15 }}>{yen(i.price)}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// STORE: SHIFT & TIMECLOCK MANAGE
+// ============================================================
+function ShiftManage({ staff, addStaff, updateStaff, deleteStaff, shiftRequests, deleteShiftRequest, confirmedShifts, publishConfirmedShift, timePunches, managerPunch, deletePunch, storeGeo, saveStoreGeo }) {
+  const [tab, setTab] = useState("requests");
+  const tabs = [
+    ["requests", "希望"],
+    ["confirmed", "確定"],
+    ["punches", "打刻"],
+    ["staff", "スタッフ"],
+    ["settings", "設定"],
+  ];
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex gap-1.5 overflow-x-auto pb-1" style={{ WebkitOverflowScrolling: "touch" }}>
+        {tabs.map(([k, l]) => (
+          <button
+            key={k}
+            onClick={() => setTab(k)}
+            className="press rounded-lg py-2 px-3"
+            style={{ background: tab === k ? C.gold : C.surfaceAlt, color: tab === k ? C.ink : C.muted, fontSize: 12, fontWeight: 700, flexShrink: 0 }}
+          >
+            {l}
+          </button>
+        ))}
+      </div>
+      {tab === "requests" && <ShiftRequestList shiftRequests={shiftRequests} deleteShiftRequest={deleteShiftRequest} publishConfirmedShift={publishConfirmedShift} staff={staff} confirmedShifts={confirmedShifts} />}
+      {tab === "confirmed" && <ConfirmedShiftList confirmedShifts={confirmedShifts} publishConfirmedShift={publishConfirmedShift} staff={staff} />}
+      {tab === "punches" && <PunchLog timePunches={timePunches} staff={staff} managerPunch={managerPunch} deletePunch={deletePunch} />}
+      {tab === "staff" && <StaffManage staff={staff} addStaff={addStaff} updateStaff={updateStaff} deleteStaff={deleteStaff} />}
+      {tab === "settings" && <GeofenceSettings storeGeo={storeGeo} saveStoreGeo={saveStoreGeo} />}
+    </div>
+  );
+}
+
+function ShiftRequestList({ shiftRequests, deleteShiftRequest, publishConfirmedShift, staff, confirmedShifts }) {
+  const [periodStart, setPeriodStart] = useState(biweeklyPeriodStart(todayKey()));
+  const dates = biweeklyDates(periodStart);
+  const reqsForPeriod = shiftRequests.filter((r) => r.periodStart === periodStart);
+  const existingConfirmed = confirmedShifts.find((c) => c.periodStart === periodStart);
+
+  // Build editable draft merged from requests (or existing confirmed) - one row per (staff, date) with start/end.
+  const [draft, setDraft] = useState(() => buildInitialDraft());
+
+  useEffect(() => setDraft(buildInitialDraft()), [periodStart, shiftRequests.length, existingConfirmed && existingConfirmed.id]);
+
+  function buildInitialDraft() {
+    if (existingConfirmed) {
+      const m = {};
+      existingConfirmed.entries.forEach((e) => {
+        const k = e.staffName + "|" + e.date;
+        m[k] = { staffId: e.staffId, staffName: e.staffName, date: e.date, start: e.start, end: e.end, note: e.note };
+      });
+      return m;
+    }
+    const m = {};
+    reqsForPeriod.forEach((r) => {
+      r.entries.forEach((e) => {
+        if (!e.start && !e.end) return;
+        const k = r.staffName + "|" + e.date;
+        m[k] = { staffId: r.staffId, staffName: r.staffName, date: e.date, start: e.start, end: e.end, note: e.note };
+      });
+    });
+    return m;
+  }
+
+  const shiftPeriod = (offset) => {
+    const cur = new Date(periodStart);
+    cur.setDate(cur.getDate() + offset * 14);
+    setPeriodStart(dateKeyOf(cur.getTime()));
+  };
+
+  const publish = () => {
+    const entries = Object.values(draft).filter((e) => e.start || e.end);
+    publishConfirmedShift(periodStart, entries);
+    alert("確定シフトを発行しました");
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <button onClick={() => shiftPeriod(-1)} className="press rounded-lg px-3 py-2" style={{ background: C.surfaceAlt, color: C.paper }}>◀</button>
+        <span style={{ flex: 1, textAlign: "center", fontFamily: FONT_MONO, fontSize: 13 }}>
+          {fmtDateKey(periodStart)} 〜 {fmtDateKey(addDays(periodStart, 13))}
+        </span>
+        <button onClick={() => shiftPeriod(1)} className="press rounded-lg px-3 py-2" style={{ background: C.surfaceAlt, color: C.paper }}>▶</button>
+      </div>
+
+      <div style={{ fontSize: 11, color: C.muted }}>
+        提出人数: {reqsForPeriod.length}人{existingConfirmed ? " ・ 確定シフト発行済(編集可)" : ""}
+      </div>
+
+      {reqsForPeriod.length === 0 && !existingConfirmed && (
+        <div className="rounded-xl px-4 py-6 text-center" style={{ background: C.surface, border: `1px dashed ${C.line}`, color: C.muted, fontSize: 13 }}>
+          この期間の希望提出はまだありません
+        </div>
+      )}
+
+      {(reqsForPeriod.length > 0 || existingConfirmed) && (
+        <>
+          <div className="flex flex-col gap-2">
+            {dates.map((d) => {
+              const rowsForDate = Object.values(draft).filter((e) => e.date === d);
+              return (
+                <div key={d} className="rounded-lg p-3" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>{fmtDateKey(d)}</div>
+                  {rowsForDate.length === 0 ? (
+                    <div style={{ fontSize: 11, color: C.muted }}>—</div>
+                  ) : (
+                    <div className="flex flex-col gap-1.5">
+                      {rowsForDate.map((row) => {
+                        const key = row.staffName + "|" + row.date;
+                        return (
+                          <div key={key} className="flex items-center gap-2">
+                            <span style={{ fontSize: 12, minWidth: 60 }}>{row.staffName}</span>
+                            <input
+                              type="time"
+                              value={row.start}
+                              onChange={(e) => setDraft((prev) => ({ ...prev, [key]: { ...prev[key], start: e.target.value } }))}
+                              style={{ ...inputStyle, fontFamily: FONT_MONO, padding: "5px 8px", fontSize: 12, flex: 1 }}
+                            />
+                            <span style={{ fontSize: 11, color: C.muted }}>〜</span>
+                            <input
+                              type="time"
+                              value={row.end}
+                              onChange={(e) => setDraft((prev) => ({ ...prev, [key]: { ...prev[key], end: e.target.value } }))}
+                              style={{ ...inputStyle, fontFamily: FONT_MONO, padding: "5px 8px", fontSize: 12, flex: 1 }}
+                            />
+                            <button
+                              onClick={() => setDraft((prev) => { const next = { ...prev }; delete next[key]; return next; })}
+                              style={{ color: C.muted }}
+                            >
+                              <X size={14} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <button onClick={publish} className="press rounded-xl py-3" style={{ background: C.gold, color: C.ink, fontWeight: 700, fontSize: 14 }}>
+            確定シフトを発行
+          </button>
+        </>
+      )}
+
+      {reqsForPeriod.length > 0 && (
+        <div className="flex flex-col gap-2 mt-2">
+          <div style={{ fontSize: 12, color: C.muted }}>提出者一覧</div>
+          {reqsForPeriod.map((r) => (
+            <div key={r.id} className="flex items-center justify-between rounded-lg px-3 py-2" style={{ background: C.surfaceAlt, border: `1px solid ${C.line}` }}>
+              <div>
+                <div style={{ fontSize: 12 }}>{r.staffName}</div>
+                <div style={{ fontSize: 10, color: C.muted }}>{new Date(r.submittedAt).toLocaleString("ja-JP")}</div>
+              </div>
+              <button onClick={() => deleteShiftRequest(r.id)} style={{ color: C.muted }}><Trash2 size={14} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConfirmedShiftList({ confirmedShifts }) {
+  const sorted = [...confirmedShifts].sort((a, b) => b.publishedAt - a.publishedAt);
+  if (sorted.length === 0) return <div style={{ fontSize: 13, color: C.muted, textAlign: "center", padding: "20px 0" }}>確定シフトはまだ発行されていません</div>;
+  return (
+    <div className="flex flex-col gap-3">
+      {sorted.map((cs) => <ConfirmedShiftCard key={cs.id} confirmed={cs} />)}
+    </div>
+  );
+}
+
+function PunchLog({ timePunches, staff, managerPunch, deletePunch }) {
+  const [staffFilter, setStaffFilter] = useState("");
+  const [rangeDays, setRangeDays] = useState(14);
+  const now = Date.now();
+  const cutoff = now - rangeDays * 86400000;
+  const filtered = timePunches
+    .filter((p) => p.ts >= cutoff)
+    .filter((p) => !staffFilter || p.staffName === staffFilter)
+    .sort((a, b) => b.ts - a.ts);
+
+  // pair in/out per staff per day for a work-hours summary
+  const summaryByStaff = {};
+  filtered.forEach((p) => {
+    if (!summaryByStaff[p.staffName]) summaryByStaff[p.staffName] = [];
+    summaryByStaff[p.staffName].push(p);
+  });
+  const workHoursByStaff = {};
+  Object.entries(summaryByStaff).forEach(([name, punches]) => {
+    let totalMs = 0;
+    let lastIn = null;
+    [...punches].reverse().forEach((p) => {
+      if (p.type === "in") lastIn = p.ts;
+      else if (p.type === "out" && lastIn) {
+        totalMs += p.ts - lastIn;
+        lastIn = null;
+      }
+    });
+    workHoursByStaff[name] = totalMs / 3600000;
+  });
+
+  // add-punch form
+  const [addOpen, setAddOpen] = useState(false);
+  const [addStaffId, setAddStaffId] = useState("");
+  const [addType, setAddType] = useState("in");
+  const [addDate, setAddDate] = useState(todayKey());
+  const [addTime, setAddTime] = useState("09:00");
+
+  const doAdd = () => {
+    const member = staff.find((s) => s.id === addStaffId);
+    if (!member) return;
+    const [h, mi] = addTime.split(":").map(Number);
+    const [y, m, d] = addDate.split("-").map(Number);
+    const ts = new Date(y, m - 1, d, h, mi).getTime();
+    managerPunch(member, addType, ts);
+    setAddOpen(false);
+  };
+
+  const fmt = (ts) => {
+    const d = new Date(ts);
+    return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex gap-2">
+        <select value={staffFilter} onChange={(e) => setStaffFilter(e.target.value)} style={{ ...inputStyle, fontFamily: FONT_BODY, flex: 2 }}>
+          <option value="">全スタッフ</option>
+          {staff.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
+        </select>
+        <select value={rangeDays} onChange={(e) => setRangeDays(Number(e.target.value))} style={{ ...inputStyle, fontFamily: FONT_BODY, flex: 1 }}>
+          <option value={7}>7日</option>
+          <option value={14}>14日</option>
+          <option value={30}>30日</option>
+          <option value={90}>90日</option>
+        </select>
+      </div>
+
+      {Object.keys(workHoursByStaff).length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <div style={{ fontSize: 12, color: C.muted }}>期間内の勤務時間</div>
+          {Object.entries(workHoursByStaff).sort((a, b) => b[1] - a[1]).map(([name, h]) => (
+            <div key={name} className="flex items-center justify-between rounded-lg px-3 py-2" style={{ background: C.surfaceAlt, border: `1px solid ${C.line}` }}>
+              <span style={{ fontSize: 13 }}>{name}</span>
+              <span style={{ fontFamily: FONT_MONO, fontWeight: 700, color: C.gold, fontSize: 14 }}>{h.toFixed(1)} 時間</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!addOpen ? (
+        <button onClick={() => setAddOpen(true)} className="press rounded-lg py-2" style={{ border: `1px dashed ${C.gold}`, color: C.gold, fontSize: 12, fontWeight: 700 }}>
+          ＋ 打刻を手動追加(店長修正)
+        </button>
+      ) : (
+        <div className="rounded-xl p-3 flex flex-col gap-2" style={{ background: C.surface, border: `1px solid ${C.gold}` }}>
+          <select value={addStaffId} onChange={(e) => setAddStaffId(e.target.value)} style={{ ...inputStyle, fontFamily: FONT_BODY }}>
+            <option value="">スタッフを選択</option>
+            {staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <div className="flex gap-2">
+            <button onClick={() => setAddType("in")} className="press flex-1 rounded-lg py-2" style={{ background: addType === "in" ? C.mint : C.surfaceAlt, color: addType === "in" ? C.ink : C.muted, fontSize: 12, fontWeight: 700 }}>出勤</button>
+            <button onClick={() => setAddType("out")} className="press flex-1 rounded-lg py-2" style={{ background: addType === "out" ? C.coral : C.surfaceAlt, color: addType === "out" ? C.ink : C.muted, fontSize: 12, fontWeight: 700 }}>退勤</button>
+          </div>
+          <div className="flex gap-2">
+            <input type="date" value={addDate} onChange={(e) => setAddDate(e.target.value)} style={{ ...inputStyle, fontFamily: FONT_MONO, flex: 1 }} />
+            <input type="time" value={addTime} onChange={(e) => setAddTime(e.target.value)} style={{ ...inputStyle, fontFamily: FONT_MONO, flex: 1 }} />
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => setAddOpen(false)} className="press flex-1 rounded-lg py-2" style={{ border: `1px solid ${C.line}`, color: C.paper, fontSize: 12 }}>キャンセル</button>
+            <button onClick={doAdd} className="press flex-1 rounded-lg py-2" style={{ background: C.gold, color: C.ink, fontWeight: 700, fontSize: 12 }}>追加</button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-col gap-1.5">
+        {filtered.map((p) => (
+          <div key={p.id} className="flex items-center justify-between rounded-lg px-3 py-2" style={{ background: C.surfaceAlt, border: `1px solid ${C.line}` }}>
+            <div>
+              <span style={{ fontSize: 13 }}>
+                <span style={{ color: p.type === "in" ? C.mint : C.coral, fontWeight: 700, marginRight: 6 }}>{p.type === "in" ? "出勤" : "退勤"}</span>
+                {p.staffName}
+              </span>
+              <div style={{ fontSize: 10, color: C.muted, fontFamily: FONT_MONO }}>
+                {fmt(p.ts)}
+                {p.byManager && <span style={{ color: C.gold, marginLeft: 6 }}>(店長修正)</span>}
+                {p.lat != null && <span style={{ marginLeft: 6 }}>GPS</span>}
+              </div>
+            </div>
+            <button onClick={() => deletePunch(p.id)} style={{ color: C.muted }}><Trash2 size={14} /></button>
+          </div>
+        ))}
+        {filtered.length === 0 && <div style={{ fontSize: 12, color: C.muted, textAlign: "center", padding: "16px 0" }}>該当する打刻がありません</div>}
+      </div>
+    </div>
+  );
+}
+
+function StaffManage({ staff, addStaff, updateStaff, deleteStaff }) {
+  const [newName, setNewName] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState("");
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex gap-2">
+        <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="スタッフ名" style={{ ...inputStyle, fontFamily: FONT_BODY }} />
+        <button
+          onClick={() => { if (!newName.trim()) return; addStaff(newName.trim()); setNewName(""); }}
+          className="press rounded-lg px-4"
+          style={{ background: C.gold, color: C.ink, fontWeight: 700, fontSize: 13 }}
+        >
+          追加
+        </button>
+      </div>
+      <div className="flex flex-col gap-2">
+        {staff.map((s) => (
+          <div key={s.id} className="flex items-center justify-between rounded-lg px-3 py-2" style={{ background: C.surfaceAlt, border: `1px solid ${C.line}` }}>
+            {editingId === s.id ? (
+              <div className="flex-1 flex gap-2">
+                <input value={editName} onChange={(e) => setEditName(e.target.value)} style={{ ...inputStyle, fontFamily: FONT_BODY, flex: 1 }} />
+                <button onClick={() => { updateStaff(s.id, editName.trim()); setEditingId(null); }} className="press rounded-lg px-3" style={{ background: C.gold, color: C.ink, fontSize: 11, fontWeight: 700 }}>保存</button>
+                <button onClick={() => setEditingId(null)} className="press rounded-lg px-2" style={{ border: `1px solid ${C.line}`, color: C.muted }}><X size={14} /></button>
+              </div>
+            ) : (
+              <>
+                <span style={{ fontSize: 13 }}>{s.name}</span>
+                <div className="flex gap-1">
+                  <button onClick={() => { setEditingId(s.id); setEditName(s.name); }} style={{ color: C.gold, fontSize: 11, padding: "2px 6px" }}>編集</button>
+                  <button onClick={() => deleteStaff(s.id)} style={{ color: C.muted }}><Trash2 size={14} /></button>
+                </div>
+              </>
+            )}
+          </div>
+        ))}
+        {staff.length === 0 && <div style={{ fontSize: 12, color: C.muted, textAlign: "center", padding: "16px 0" }}>スタッフが登録されていません</div>}
+      </div>
+    </div>
+  );
+}
+
+function GeofenceSettings({ storeGeo, saveStoreGeo }) {
+  const [enabled, setEnabled] = useState(storeGeo.enabled);
+  const [lat, setLat] = useState(storeGeo.lat ?? "");
+  const [lng, setLng] = useState(storeGeo.lng ?? "");
+  const [radiusM, setRadiusM] = useState(storeGeo.radiusM || 100);
+  const [busy, setBusy] = useState(false);
+
+  const captureCurrent = () => {
+    setBusy(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => { setLat(pos.coords.latitude); setLng(pos.coords.longitude); setBusy(false); },
+      (err) => { alert("位置情報が取得できませんでした: " + err.message); setBusy(false); },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
+
+  const save = () => {
+    saveStoreGeo({ enabled, lat: lat === "" ? null : Number(lat), lng: lng === "" ? null : Number(lng), radiusM: Number(radiusM) || 100 });
+    alert("設定を保存しました");
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+        <div style={{ fontSize: 12, color: C.muted }}>タイムカードの打刻を店舗周辺に限定します(GPS)</div>
+        <div className="flex items-center justify-between">
+          <span style={{ fontSize: 13, fontWeight: 700 }}>位置チェックを有効化</span>
+          <Toggle checked={enabled} onChange={setEnabled} />
+        </div>
+        <div>
+          <label style={labelStyle}>店舗の緯度・経度</label>
+          <div className="flex gap-2">
+            <input value={lat} onChange={(e) => setLat(e.target.value)} placeholder="緯度" style={{ ...inputStyle, fontFamily: FONT_MONO, flex: 1 }} />
+            <input value={lng} onChange={(e) => setLng(e.target.value)} placeholder="経度" style={{ ...inputStyle, fontFamily: FONT_MONO, flex: 1 }} />
+          </div>
+          <button onClick={captureCurrent} disabled={busy} className="press rounded-lg py-2 mt-2 w-full" style={{ border: `1px solid ${C.gold}`, color: C.gold, fontSize: 12, fontWeight: 700, opacity: busy ? 0.5 : 1 }}>
+            {busy ? "取得中…" : "現在地を店舗として登録"}
+          </button>
+        </div>
+        <div>
+          <label style={labelStyle}>許容範囲(メートル)</label>
+          <input type="number" value={radiusM} onChange={(e) => setRadiusM(e.target.value)} style={{ ...inputStyle, fontFamily: FONT_MONO }} />
+        </div>
+        <button onClick={save} className="press rounded-lg py-2" style={{ background: C.gold, color: C.ink, fontWeight: 700, fontSize: 13 }}>保存</button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// STORE: BUYBACK MANAGE
+// ============================================================
+function BuybackManage({ items, addItem, updateItem, deleteItem }) {
+  const [cat, setCat] = useState("pokemon");
+  const [newName, setNewName] = useState("");
+  const [newPrice, setNewPrice] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState("");
+  const [editPrice, setEditPrice] = useState("");
+
+  const filtered = items.filter((i) => i.category === cat).sort((a, b) => b.price - a.price);
+
+  const add = () => {
+    if (!newName.trim() || newPrice === "") return;
+    addItem(cat, newName.trim(), newPrice);
+    setNewName("");
+    setNewPrice("");
+  };
+
+  const beginEdit = (i) => {
+    setEditingId(i.id);
+    setEditName(i.name);
+    setEditPrice(String(i.price));
+  };
+  const saveEdit = () => {
+    updateItem(editingId, { name: editName.trim(), price: Number(editPrice) || 0 });
+    setEditingId(null);
+  };
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex gap-2">
+        {[
+          ["pokemon", "ポケモン"],
+          ["onepiece", "ワンピース"],
+        ].map(([k, l]) => (
+          <button
+            key={k}
+            onClick={() => setCat(k)}
+            className="press flex-1 rounded-lg py-2"
+            style={{ background: cat === k ? C.gold : C.surfaceAlt, color: cat === k ? C.ink : C.muted, fontSize: 13, fontWeight: 700 }}
+          >
+            {l}({items.filter((i) => i.category === k).length})
+          </button>
+        ))}
+      </div>
+
+      <div className="rounded-xl p-3 flex flex-col gap-2" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+        <div style={{ fontSize: 11, color: C.muted }}>新しい買取カードを追加</div>
+        <div className="flex gap-2">
+          <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="カード名" style={{ ...inputStyle, fontFamily: FONT_BODY, flex: 2 }} />
+          <input type="number" value={newPrice} onChange={(e) => setNewPrice(e.target.value)} placeholder="金額" style={{ ...inputStyle, flex: 1 }} />
+        </div>
+        <button onClick={add} className="press rounded-lg py-2" style={{ background: C.gold, color: C.ink, fontWeight: 700, fontSize: 13 }}>追加</button>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        {filtered.map((i, idx) => (
+          <div key={i.id} className="rounded-lg px-3 py-2" style={{ background: C.surface, border: `1px solid ${idx < 3 ? C.gold : C.line}` }}>
+            {editingId === i.id ? (
+              <div className="flex flex-col gap-2">
+                <input value={editName} onChange={(e) => setEditName(e.target.value)} style={{ ...inputStyle, fontFamily: FONT_BODY }} />
+                <input type="number" value={editPrice} onChange={(e) => setEditPrice(e.target.value)} style={{ ...inputStyle }} />
+                <div className="flex gap-2">
+                  <button onClick={() => setEditingId(null)} className="press flex-1 rounded-lg py-2" style={{ border: `1px solid ${C.line}`, color: C.paper, fontSize: 12 }}>キャンセル</button>
+                  <button onClick={saveEdit} className="press flex-1 rounded-lg py-2" style={{ background: C.gold, color: C.ink, fontSize: 12, fontWeight: 700 }}>保存</button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 min-w-0" style={{ flex: 1 }}>
+                  <span style={{ fontFamily: FONT_MONO, fontWeight: 700, color: idx < 3 ? C.gold : C.muted, fontSize: 12, minWidth: 20 }}>{idx + 1}</span>
+                  <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.name}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span style={{ fontFamily: FONT_MONO, fontWeight: 700, color: C.gold, fontSize: 14 }}>{yen(i.price)}</span>
+                  <button onClick={() => beginEdit(i)} style={{ color: C.gold, fontSize: 10, padding: "2px 6px" }}>編集</button>
+                  <button onClick={() => deleteItem(i.id)} style={{ color: C.muted }}><Trash2 size={13} /></button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+        {filtered.length === 0 && <div style={{ fontSize: 12, color: C.muted, textAlign: "center", padding: "16px 0" }}>まだ登録がありません</div>}
+      </div>
     </div>
   );
 }
