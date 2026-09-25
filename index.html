@@ -2856,7 +2856,7 @@ const RANK_GROUP_COLOR = { rainbow: C.gold, gold: "#D4A94A", silver: "#B8C0CC", 
 const RANK_GROUP_LABEL = { rainbow: "🌈 虹枠", gold: "🥇 金枠", silver: "🥈 銀枠", bronze: "🥉 銅枠", other: "その他" };
 const RANK_GROUP_ORDER = ["rainbow", "gold", "silver", "bronze", "other"];
 
-function RankGroupedPicker({ tiers, onPick, isForeign = false }) {
+function RankGroupedPicker({ tiers, onPick, isForeign = false, consumedIds = null }) {
   const groups = {};
   tiers.forEach((t) => {
     const key = RANK_GROUP_ORDER.includes(t.rank) ? t.rank : "other";
@@ -2877,19 +2877,27 @@ function RankGroupedPicker({ tiers, onPick, isForeign = false }) {
             <span style={{ fontSize: 10, color: C.muted }}>{groups[k].length}個</span>
           </div>
           <div className="grid grid-cols-2 gap-2">
-            {groups[k].map((t) => (
-              <button
-                key={t.id}
-                onClick={() => onPick(t)}
-                className="press flex flex-col items-start rounded-lg px-3 py-2"
-                style={{ background: C.surfaceAlt, border: `1px solid ${RANK_GROUP_COLOR[k]}` }}
-              >
-                <span style={{ fontSize: 11, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%" }}>
-                  {t.name}
-                </span>
-                <span style={{ fontFamily: FONT_MONO, fontWeight: 700, color: RANK_GROUP_COLOR[k], fontSize: 13 }}>{yen(priceOf(t))}</span>
-              </button>
-            ))}
+            {groups[k].map((t) => {
+              const isTaken = consumedIds && consumedIds.has(t.id);
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => onPick(t)}
+                  className="press flex flex-col items-start rounded-lg px-3 py-2"
+                  style={{
+                    background: C.surfaceAlt,
+                    border: `1px solid ${isTaken ? C.line : RANK_GROUP_COLOR[k]}`,
+                    opacity: isTaken ? 0.4 : 1,
+                    cursor: isTaken ? "default" : "pointer",
+                  }}
+                >
+                  <span style={{ fontSize: 11, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%" }}>
+                    {t.name}
+                  </span>
+                  <span style={{ fontFamily: FONT_MONO, fontWeight: 700, color: RANK_GROUP_COLOR[k], fontSize: 13 }}>{yen(priceOf(t))}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
       ))}
@@ -3031,19 +3039,38 @@ function SessionCard({ session, oripa, fullLog, onDraw, onWin, onHazure, onEnd, 
         </button>
       </div>
 
-      {showWinPicker &&
-        (box.remainingTiers.length === 0 ? (
-          <div style={{ fontSize: 12, color: C.muted, textAlign: "center" }}>残りのあたりはありません</div>
-        ) : (
-          <RankGroupedPicker
-            tiers={box.remainingTiers}
-            isForeign={isForeign}
-            onPick={(t) => {
-              onWin(t);
-              setShowWinPicker(false);
-            }}
-          />
-        ))}
+      {showWinPicker && (() => {
+        // When "showDetails" is on: consumed cards vanish from picker (staff mode).
+        // When off: customer sees full inventory; only session-scoped double-tap of the same tier is ignored.
+        const tiersToShow = session.showDetails ? box.remainingTiers : oripa.tiers;
+        // tierIds this session already recorded (to prevent double-count on tap)
+        const sessionWonTierIds = new Set(sessionLog.filter((e) => e.type === "win" && e.tierId).map((e) => e.tierId));
+        if (tiersToShow.length === 0) {
+          return <div style={{ fontSize: 12, color: C.muted, textAlign: "center" }}>残りのあたりはありません</div>;
+        }
+        return (
+          <>
+            {!session.showDetails && (
+              <div style={{ fontSize: 10, color: C.muted, textAlign: "center", marginBottom: -4 }}>
+                獲得したい景品を選んでください
+              </div>
+            )}
+            <RankGroupedPicker
+              tiers={tiersToShow}
+              isForeign={isForeign}
+              consumedIds={session.showDetails ? null : sessionWonTierIds}
+              onPick={(t) => {
+                if (!session.showDetails && sessionWonTierIds.has(t.id)) {
+                  // ignore double-tap of the same specific tier in this session
+                  return;
+                }
+                onWin(t);
+                if (session.showDetails) setShowWinPicker(false);
+              }}
+            />
+          </>
+        );
+      })()}
 
       {oripa.minGuarantee.enabled &&
         (notRedeemedInput === null ? (
