@@ -2615,6 +2615,7 @@ function StoreShell({
           oripaList={oripaList}
           logsById={logsById}
           sessions={sessions}
+          buybackDaily={buybackDaily}
         />
       )}
       {storeSubTab === "staffAdmin" && adminUnlocked && (
@@ -3476,6 +3477,18 @@ function DailyDashboard({ oripaList, logsById, sessions, settlements, settleToda
 
       {view === "report" && (
         <div className="flex flex-col gap-3">
+          <PdfExportButton
+            label="この日のレポートをPDFで出力"
+            dateKey={key}
+            oripaList={oripaList}
+            logsById={logsById}
+            sessions={sessions}
+            expenses={expenses}
+            punches={timePunches}
+            staff={staff}
+            comp={staffCompensation}
+            buybackDaily={buybackDaily || {}}
+          />
           <div className="rounded-xl p-4" style={{ background: C.surface, border: `1px solid ${C.gold}` }}>
             <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, marginBottom: 8 }}>{key} の収支レポート</div>
             <div className="flex flex-col gap-2">
@@ -5858,7 +5871,7 @@ function StaffPayDetail({ staffMember, comp, timePunches, onBack, onEditPay }) {
 // ============================================================
 // FINANCE VIEW: expenses ledger + monthly P&L
 // ============================================================
-function FinanceView({ expenses, addExpense, updateExpense, deleteExpense, staff, staffCompensation, setStaffPay, timePunches, oripaList, logsById, sessions }) {
+function FinanceView({ expenses, addExpense, updateExpense, deleteExpense, staff, staffCompensation, setStaffPay, timePunches, oripaList, logsById, sessions, buybackDaily }) {
   const currentMonth = todayKey().slice(0, 7);
   const [monthKey, setMonthKey] = useState(currentMonth);
 
@@ -5915,6 +5928,19 @@ function FinanceView({ expenses, addExpense, updateExpense, deleteExpense, staff
         <span style={{ flex: 1, textAlign: "center", fontFamily: FONT_MONO, fontSize: 15, fontWeight: 700 }}>{monthKey}</span>
         <button onClick={() => shiftMonth(1)} className="press rounded-lg px-3 py-2" style={{ background: C.surfaceAlt, color: C.paper }}>▶</button>
       </div>
+
+      <PdfExportButton
+        label="月次レポートをPDFで出力"
+        monthKey={monthKey}
+        oripaList={oripaList}
+        logsById={logsById}
+        sessions={sessions}
+        expenses={expenses}
+        punches={timePunches}
+        staff={staff}
+        comp={staffCompensation}
+        buybackDaily={buybackDaily || {}}
+      />
 
       {/* P&L summary card */}
       <div className="rounded-xl p-4" style={{ background: C.surface, border: `1px solid ${C.gold}` }}>
@@ -6078,6 +6104,222 @@ function ReportRow({ label, value, color, bold }) {
 }
 
 // ============================================================
+// PDF REPORT PRINTER (opens a new tab and triggers print/save-as-PDF)
+// ============================================================
+function openReportPrint(title, htmlBody) {
+  const w = window.open("", "_blank", "width=900,height=1200");
+  if (!w) { alert("ブラウザがポップアップをブロックしています。ポップアップ許可してください。"); return; }
+  const doc = `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>${title}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: 'Zen Kaku Gothic New', -apple-system, sans-serif; color:#12151C; margin: 24px; background:#fff; }
+    h1 { font-size: 20px; margin: 0 0 6px 0; }
+    h2 { font-size: 15px; margin: 20px 0 8px 0; border-bottom: 1px solid #999; padding-bottom: 4px; }
+    .meta { font-size: 11px; color: #666; margin-bottom: 12px; }
+    table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    table th, table td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
+    table th { background: #f2f2f2; font-weight: 700; }
+    .num { font-family: 'JetBrains Mono', monospace; text-align: right; }
+    .positive { color: #1e6f3e; font-weight: 700; }
+    .negative { color: #9e3b31; font-weight: 700; }
+    .summary { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .summary .box { border: 1px solid #ccc; padding: 8px 10px; border-radius: 4px; }
+    .summary .box .lbl { font-size: 10px; color: #666; }
+    .summary .box .val { font-family: 'JetBrains Mono', monospace; font-size: 16px; font-weight: 700; }
+    .big { font-size: 20px; font-family: 'JetBrains Mono', monospace; font-weight: 800; }
+    .foot { margin-top: 24px; font-size: 10px; color: #888; }
+    @media print { body { margin: 12mm; } .no-print { display:none; } }
+    .btn { display:inline-block; padding: 8px 18px; background:#12151C; color:#fff; border:none; border-radius: 4px; font-size:13px; cursor:pointer; margin-right:8px; }
+  </style></head><body>
+  <div class="no-print" style="margin-bottom:16px; padding-bottom:12px; border-bottom:1px solid #ccc;">
+    <button class="btn" onclick="window.print()">PDFとして保存 / 印刷</button>
+    <button class="btn" style="background:#666;" onclick="window.close()">閉じる</button>
+    <span style="font-size:11px; color:#666; margin-left:8px;">プリント画面で「保存先: PDFに保存」を選んでください</span>
+  </div>
+  ${htmlBody}
+  <div class="foot">Generated ${new Date().toLocaleString("ja-JP")} — トレぴ店舗管理システム</div>
+  </body></html>`;
+  w.document.write(doc);
+  w.document.close();
+}
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function yenPlain(n) {
+  const v = Math.round(Number(n) || 0);
+  const sign = v < 0 ? "-" : "";
+  return `${sign}¥${Math.abs(v).toLocaleString("ja-JP")}`;
+}
+function yenSigned(n) {
+  const v = Math.round(Number(n) || 0);
+  const sign = v > 0 ? "+" : v < 0 ? "-" : "";
+  return `${sign}¥${Math.abs(v).toLocaleString("ja-JP")}`;
+}
+
+function buildMonthlyReportHTML({ monthKey, sections, oripaList, logsById, sessions, expenses, punches, staff, comp, buybackDaily, storeName }) {
+  const fin = computeMonthlyFinance(monthKey, oripaList, logsById, sessions, expenses, punches, staff, comp);
+  // buyback totals across month
+  let bbPurchase = 0, bbSale = 0;
+  Object.entries(buybackDaily || {}).forEach(([dk, v]) => {
+    if (monthKeyOf(dk) === monthKey) { bbPurchase += Number(v.purchase || 0); bbSale += Number(v.sale || 0); }
+  });
+  const bbNet = bbSale - bbPurchase;
+  const totalIncome = fin.grossProfit + bbNet;
+  const totalOut = fin.payrollTotal + fin.otherExpensesTotal;
+  const netAll = totalIncome - totalOut;
+
+  let html = `<h1>月次レポート ${monthKey}</h1>`;
+  html += `<div class="meta">${storeName || "店舗"} / 発行日 ${new Date().toLocaleDateString("ja-JP")}</div>`;
+
+  // section: summary
+  if (sections.summary) {
+    html += `<h2>月次サマリ</h2>
+    <div class="summary">
+      <div class="box"><div class="lbl">オリパ売上</div><div class="val">${yenPlain(fin.sales)}</div></div>
+      <div class="box"><div class="lbl">景品払出</div><div class="val">${yenPlain(fin.payout)}</div></div>
+      <div class="box"><div class="lbl">オリパ粗利</div><div class="val positive">${yenPlain(fin.grossProfit)}</div></div>
+      <div class="box"><div class="lbl">買取販売 収支</div><div class="val ${bbNet >= 0 ? "positive" : "negative"}">${yenSigned(bbNet)}</div></div>
+      <div class="box"><div class="lbl">人件費(給与+交通費)</div><div class="val negative">${yenPlain(fin.payrollTotal)}</div></div>
+      <div class="box"><div class="lbl">その他経費</div><div class="val negative">${yenPlain(fin.otherExpensesTotal)}</div></div>
+    </div>
+    <div style="margin-top:14px; padding:12px; border:2px solid #12151C; border-radius:6px; display:flex; justify-content:space-between; align-items:center;">
+      <span style="font-weight:700;">当月の営業利益</span>
+      <span class="big ${netAll >= 0 ? "positive" : "negative"}">${yenSigned(netAll)}</span>
+    </div>`;
+  }
+
+  // section: category breakdown
+  if (sections.categoryBreakdown) {
+    html += `<h2>項目別内訳</h2>`;
+    if (Object.keys(fin.expensesByCat).length === 0) html += `<div style="font-size:12px; color:#666;">この月の経費は未登録</div>`;
+    else {
+      html += `<table><thead><tr><th>項目</th><th class="num">金額</th></tr></thead><tbody>`;
+      Object.entries(fin.expensesByCat).sort((a, b) => b[1] - a[1]).forEach(([k, v]) => {
+        html += `<tr><td>${esc(k)}</td><td class="num">${yenPlain(v)}</td></tr>`;
+      });
+      html += `<tr><td><b>合計</b></td><td class="num"><b>${yenPlain(fin.otherExpensesTotal)}</b></td></tr>`;
+      html += `</tbody></table>`;
+    }
+  }
+
+  // section: expenses ledger
+  if (sections.expenses) {
+    html += `<h2>経費帳(明細)</h2>`;
+    const sorted = [...fin.monthExpenses].sort((a, b) => a.date.localeCompare(b.date));
+    if (sorted.length === 0) html += `<div style="font-size:12px; color:#666;">明細なし</div>`;
+    else {
+      html += `<table><thead><tr><th>日付</th><th>項目</th><th>メモ</th><th class="num">金額</th></tr></thead><tbody>`;
+      sorted.forEach((e) => {
+        html += `<tr><td>${esc(e.date)}</td><td>${esc(e.category)}</td><td>${esc(e.memo)}</td><td class="num">${yenPlain(e.amount)}</td></tr>`;
+      });
+      html += `</tbody></table>`;
+    }
+  }
+
+  // section: payroll detail
+  if (sections.payroll) {
+    html += `<h2>人件費内訳(勤怠から自動計算)</h2>`;
+    if (fin.payroll.length === 0) html += `<div style="font-size:12px; color:#666;">この月の打刻記録がありません</div>`;
+    else {
+      html += `<table><thead><tr><th>スタッフ</th><th class="num">勤務時間</th><th class="num">出勤日数</th><th class="num">給与</th><th class="num">交通費</th><th class="num">合計</th></tr></thead><tbody>`;
+      fin.payroll.forEach((p) => {
+        html += `<tr><td>${esc(p.name)}</td><td class="num">${p.hours.toFixed(1)}h</td><td class="num">${p.workDays}日</td><td class="num">${yenPlain(p.wage)}</td><td class="num">${yenPlain(p.commute)}</td><td class="num"><b>${yenPlain(p.total)}</b></td></tr>`;
+      });
+      html += `<tr><td colspan="5"><b>合計</b></td><td class="num"><b>${yenPlain(fin.payrollTotal)}</b></td></tr>`;
+      html += `</tbody></table>`;
+    }
+  }
+
+  // section: daily list
+  if (sections.daily) {
+    html += `<h2>日別売上・収支</h2>`;
+    // gather all dates present in the month from logs / expenses / punches / buyback
+    const dates = new Set();
+    oripaList.forEach((o) => {
+      (logsById[o.id] || []).forEach((e) => { const dk = dateKeyOf(e.ts); if (monthKeyOf(dk) === monthKey) dates.add(dk); });
+    });
+    expenses.forEach((e) => { if (monthKeyOf(e.date) === monthKey) dates.add(e.date); });
+    punches.forEach((p) => { const dk = dateKeyOf(p.ts); if (monthKeyOf(dk) === monthKey) dates.add(dk); });
+    Object.keys(buybackDaily || {}).forEach((dk) => { if (monthKeyOf(dk) === monthKey) dates.add(dk); });
+    const dArr = Array.from(dates).sort();
+
+    if (dArr.length === 0) html += `<div style="font-size:12px; color:#666;">記録なし</div>`;
+    else {
+      html += `<table><thead><tr><th>日付</th><th class="num">オリパ売上</th><th class="num">払出</th><th class="num">粗利</th><th class="num">買取収支</th><th class="num">人件費</th><th class="num">経費</th><th class="num">収支</th></tr></thead><tbody>`;
+      let tSales = 0, tPayout = 0, tPay = 0, tExp = 0, tBB = 0, tNet = 0;
+      dArr.forEach((dk) => {
+        const s = computeDailyStats(dk, oripaList, logsById, sessions);
+        const gp = (s.totalSales - s.totalPayout) || 0;
+        const dayPunches = punches.filter((p) => dateKeyOf(p.ts) === dk);
+        const dayPayroll = computeTodayPayroll(dayPunches, staff, comp);
+        const payDay = dayPayroll.reduce((a, x) => a + x.total, 0);
+        const expDay = expenses.filter((e) => e.date === dk).reduce((a, x) => a + Number(x.amount || 0), 0);
+        const bb = buybackDaily[dk] || {};
+        const bbNetDay = (Number(bb.sale) || 0) - (Number(bb.purchase) || 0);
+        const net = gp + bbNetDay - payDay - expDay;
+        tSales += s.totalSales; tPayout += s.totalPayout; tPay += payDay; tExp += expDay; tBB += bbNetDay; tNet += net;
+        html += `<tr><td>${esc(dk)}</td><td class="num">${yenPlain(s.totalSales)}</td><td class="num">${yenPlain(s.totalPayout)}</td><td class="num ${gp >= 0 ? "positive" : "negative"}">${yenPlain(gp)}</td><td class="num ${bbNetDay >= 0 ? "positive" : "negative"}">${yenSigned(bbNetDay)}</td><td class="num">${yenPlain(payDay)}</td><td class="num">${yenPlain(expDay)}</td><td class="num ${net >= 0 ? "positive" : "negative"}">${yenSigned(net)}</td></tr>`;
+      });
+      html += `<tr><td><b>合計</b></td><td class="num"><b>${yenPlain(tSales)}</b></td><td class="num"><b>${yenPlain(tPayout)}</b></td><td class="num"><b>${yenPlain(tSales - tPayout)}</b></td><td class="num"><b>${yenSigned(tBB)}</b></td><td class="num"><b>${yenPlain(tPay)}</b></td><td class="num"><b>${yenPlain(tExp)}</b></td><td class="num ${tNet >= 0 ? "positive" : "negative"}"><b>${yenSigned(tNet)}</b></td></tr>`;
+      html += `</tbody></table>`;
+    }
+  }
+  return html;
+}
+
+function buildDailyReportHTML({ dateKey, oripaList, logsById, sessions, expenses, punches, staff, comp, buybackDaily, storeName }) {
+  const s = computeDailyStats(dateKey, oripaList, logsById, sessions);
+  const gp = (s.totalSales - s.totalPayout) || 0;
+  const dayPunches = punches.filter((p) => dateKeyOf(p.ts) === dateKey);
+  const dayPayroll = computeTodayPayroll(dayPunches, staff, comp);
+  const payDay = dayPayroll.reduce((a, x) => a + x.total, 0);
+  const dayExpenses = expenses.filter((e) => e.date === dateKey);
+  const expDay = dayExpenses.reduce((a, x) => a + Number(x.amount || 0), 0);
+  const bb = buybackDaily[dateKey] || {};
+  const bbNet = (Number(bb.sale) || 0) - (Number(bb.purchase) || 0);
+  const net = gp + bbNet - payDay - expDay;
+
+  let html = `<h1>日次レポート ${dateKey}</h1>`;
+  html += `<div class="meta">${storeName || "店舗"} / 発行日 ${new Date().toLocaleDateString("ja-JP")}</div>`;
+
+  html += `<h2>本日のサマリ</h2>
+  <div class="summary">
+    <div class="box"><div class="lbl">オリパ売上</div><div class="val">${yenPlain(s.totalSales)}</div></div>
+    <div class="box"><div class="lbl">景品払出</div><div class="val">${yenPlain(s.totalPayout)}</div></div>
+    <div class="box"><div class="lbl">オリパ粗利</div><div class="val ${gp >= 0 ? "positive" : "negative"}">${yenPlain(gp)}</div></div>
+    <div class="box"><div class="lbl">買取(仕入)</div><div class="val">${yenPlain(bb.purchase || 0)}</div></div>
+    <div class="box"><div class="lbl">販売売上</div><div class="val">${yenPlain(bb.sale || 0)}</div></div>
+    <div class="box"><div class="lbl">買取販売 収支</div><div class="val ${bbNet >= 0 ? "positive" : "negative"}">${yenSigned(bbNet)}</div></div>
+    <div class="box"><div class="lbl">人件費</div><div class="val negative">${yenPlain(payDay)}</div></div>
+    <div class="box"><div class="lbl">経費</div><div class="val negative">${yenPlain(expDay)}</div></div>
+  </div>
+  <div style="margin-top:14px; padding:12px; border:2px solid #12151C; border-radius:6px; display:flex; justify-content:space-between; align-items:center;">
+    <span style="font-weight:700;">本日の収支</span>
+    <span class="big ${net >= 0 ? "positive" : "negative"}">${yenSigned(net)}</span>
+  </div>`;
+
+  if (dayPayroll.length > 0) {
+    html += `<h2>人件費内訳</h2><table><thead><tr><th>スタッフ</th><th class="num">勤務時間</th><th class="num">給与</th><th class="num">交通費</th><th class="num">合計</th></tr></thead><tbody>`;
+    dayPayroll.forEach((p) => {
+      html += `<tr><td>${esc(p.name)}</td><td class="num">${p.hours.toFixed(1)}h</td><td class="num">${yenPlain(p.wage)}</td><td class="num">${yenPlain(p.commute)}</td><td class="num"><b>${yenPlain(p.total)}</b></td></tr>`;
+    });
+    html += `<tr><td colspan="4"><b>合計</b></td><td class="num"><b>${yenPlain(payDay)}</b></td></tr></tbody></table>`;
+  }
+
+  if (dayExpenses.length > 0) {
+    html += `<h2>経費内訳</h2><table><thead><tr><th>項目</th><th>メモ</th><th class="num">金額</th></tr></thead><tbody>`;
+    dayExpenses.forEach((e) => {
+      html += `<tr><td>${esc(e.category)}</td><td>${esc(e.memo)}</td><td class="num">${yenPlain(e.amount)}</td></tr>`;
+    });
+    html += `<tr><td colspan="2"><b>合計</b></td><td class="num"><b>${yenPlain(expDay)}</b></td></tr></tbody></table>`;
+  }
+  return html;
+}
+
+
+// ============================================================
 // STORE-side shift: contains staff-facing (punch/submit/view confirmed)
 // AND manager-facing (requests/confirmed/punchLog/settings)
 // ============================================================
@@ -6123,6 +6365,90 @@ function StoreShiftAll({ staff, addStaff, updateStaff, deleteStaff, shiftRequest
           hideStaffCrud={hideStaffCrud}
         />
       )}
+    </div>
+  );
+}
+
+// ============================================================
+// PDF EXPORT BUTTON: opens a modal to select sections, then opens print page
+// ============================================================
+function PdfExportButton({ label, monthKey, dateKey, oripaList, logsById, sessions, expenses, punches, staff, comp, buybackDaily }) {
+  const [open, setOpen] = useState(false);
+  const [sections, setSections] = useState({
+    summary: true,
+    categoryBreakdown: true,
+    expenses: true,
+    payroll: true,
+    daily: monthKey ? true : false,
+  });
+
+  const toggle = (k) => setSections((s) => ({ ...s, [k]: !s[k] }));
+
+  const run = () => {
+    if (monthKey) {
+      const html = buildMonthlyReportHTML({
+        monthKey, sections,
+        oripaList, logsById, sessions, expenses, punches, staff, comp, buybackDaily,
+        storeName: "トレぴ",
+      });
+      openReportPrint(`月次レポート ${monthKey}`, html);
+    } else if (dateKey) {
+      const html = buildDailyReportHTML({
+        dateKey,
+        oripaList, logsById, sessions, expenses, punches, staff, comp, buybackDaily,
+        storeName: "トレぴ",
+      });
+      openReportPrint(`日次レポート ${dateKey}`, html);
+    }
+    setOpen(false);
+  };
+
+  const opts = monthKey ? [
+    ["summary", "月次サマリ(必須)"],
+    ["categoryBreakdown", "項目別内訳"],
+    ["expenses", "経費帳(明細)"],
+    ["payroll", "人件費内訳(スタッフ別)"],
+    ["daily", "日別売上・収支"],
+  ] : [
+    ["summary", "サマリ(必須)"],
+  ];
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="press rounded-xl py-2.5"
+        style={{ border: `1px solid ${C.gold}`, color: C.gold, fontSize: 12, fontWeight: 700 }}
+      >
+        📄 {label}
+      </button>
+    );
+  }
+
+  return (
+    <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.surface, border: `1px solid ${C.gold}` }}>
+      <div style={{ fontSize: 13, fontWeight: 700 }}>PDFに含める内容を選択</div>
+      <div className="flex flex-col gap-2">
+        {opts.map(([k, l]) => (
+          <label key={k} className="flex items-center gap-2" style={{ cursor: k === "summary" ? "default" : "pointer" }}>
+            <input
+              type="checkbox"
+              checked={sections[k] || k === "summary"}
+              disabled={k === "summary"}
+              onChange={() => toggle(k)}
+              style={{ width: 16, height: 16 }}
+            />
+            <span style={{ fontSize: 13 }}>{l}</span>
+          </label>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <button onClick={() => setOpen(false)} className="press flex-1 rounded-lg py-2" style={{ border: `1px solid ${C.line}`, color: C.paper, fontSize: 12 }}>キャンセル</button>
+        <button onClick={run} className="press flex-1 rounded-lg py-2" style={{ background: C.gold, color: C.ink, fontSize: 13, fontWeight: 700 }}>PDF出力</button>
+      </div>
+      <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.4 }}>
+        新しいタブが開きます。プリント画面で「保存先: PDFに保存」を選ぶとPDFとして保存できます。
+      </div>
     </div>
   );
 }
