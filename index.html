@@ -31,44 +31,153 @@
   </div>
 </div>
 <script>
+// Firebase-backed storage shim with real-time multi-device sync.
+// Interface compatible with the previous local shim: window.storage.{get,set,delete}
+// Reads/writes to Firestore + localStorage (local as cache / offline fallback).
+// Dispatches a window event "storage-remote-update" with { detail: { key } } when
+// a remote device changes a key, so the app can re-read and refresh its React state.
 (function () {
-  var PREFIX = "oripa_app::";
+  var FIREBASE_CONFIG = {
+    apiKey: "AIzaSyB8mS7AKtMAA_WWXjWGEnNgxrt2xOfXtbE",
+    authDomain: "torepi-store.firebaseapp.com",
+    projectId: "torepi-store",
+    storageBucket: "torepi-store.firebasestorage.app",
+    messagingSenderId: "650220062622",
+    appId: "1:650220062622:web:c91b5b5021cc60514e788f",
+  };
 
-  function readAll() {
+  var LS_PREFIX = "oripa_app::";
+  var COLLECTION = "shared";
+  var DOC_ID = "state"; // single document holding all keys of the shared store
+
+  // local cache (also stored in localStorage for offline)
+  var cache = {};
+  // last values we wrote ourselves (so we don't trigger our own "remote update")
+  var lastWrittenJson = {};
+
+  function readLocal() {
     try {
-      var raw = window.localStorage.getItem(PREFIX + "__data");
+      var raw = window.localStorage.getItem(LS_PREFIX + "__data");
       return raw ? JSON.parse(raw) : {};
     } catch (e) {
       return {};
     }
   }
-  function writeAll(obj) {
+  function writeLocal(obj) {
     try {
-      window.localStorage.setItem(PREFIX + "__data", JSON.stringify(obj));
+      window.localStorage.setItem(LS_PREFIX + "__data", JSON.stringify(obj));
+    } catch (e) {}
+  }
+
+  cache = readLocal();
+
+  // Minimal fire-and-forget Firebase SDK via CDN. We use the "compat" (v8 style) build
+  // because it's a single global `firebase` object, easy to use without a bundler.
+  function loadScript(src) {
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement("script");
+      s.src = src;
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+
+  var firebaseReady = (async function () {
+    try {
+      await loadScript("https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js");
+      await loadScript("https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js");
+      await loadScript("https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js");
+      if (!window.firebase) throw new Error("firebase global missing");
+      window.firebase.initializeApp(FIREBASE_CONFIG);
+      // anonymous sign-in
+      await window.firebase.auth().signInAnonymously();
+      // enable offline persistence (so when offline, writes queue and reads use cache)
+      try {
+        await window.firebase.firestore().enablePersistence({ synchronizeTabs: true });
+      } catch (e) { /* already enabled / multi-tab issue - ignore */ }
+      var db = window.firebase.firestore();
+      // start realtime listener on the shared doc
+      db.collection(COLLECTION).doc(DOC_ID).onSnapshot(function (snap) {
+        if (!snap.exists) return;
+        var data = snap.data() || {};
+        var changedKeys = [];
+        // compare each key against our cache
+        Object.keys(data).forEach(function (k) {
+          var newVal = data[k];
+          var oldVal = cache[k];
+          if (JSON.stringify(newVal) !== JSON.stringify(oldVal)) {
+            cache[k] = newVal;
+            changedKeys.push(k);
+          }
+        });
+        // keys deleted remotely
+        Object.keys(cache).forEach(function (k) {
+          if (!(k in data)) {
+            delete cache[k];
+            changedKeys.push(k);
+          }
+        });
+        if (changedKeys.length > 0) {
+          writeLocal(cache);
+          // dispatch events so the app can re-render
+          changedKeys.forEach(function (k) {
+            try {
+              window.dispatchEvent(new CustomEvent("storage-remote-update", { detail: { key: k } }));
+            } catch (e) {}
+          });
+          try {
+            window.dispatchEvent(new CustomEvent("storage-remote-batch", { detail: { keys: changedKeys } }));
+          } catch (e) {}
+        }
+      }, function (err) {
+        console.warn("Firestore snapshot error:", err && err.message);
+      });
+      return db;
     } catch (e) {
-      /* storage full or unavailable - ignore, data just won't persist */
+      console.warn("Firebase init failed, falling back to local-only mode:", e && e.message);
+      return null;
+    }
+  })();
+
+  async function pushToFirestore(key, value, isDelete) {
+    try {
+      var db = await firebaseReady;
+      if (!db) return;
+      var patch = {};
+      if (isDelete) {
+        patch[key] = window.firebase.firestore.FieldValue.delete();
+      } else {
+        patch[key] = value;
+      }
+      await db.collection(COLLECTION).doc(DOC_ID).set(patch, { merge: true });
+    } catch (e) {
+      // offline — the write will queue in Firestore's offline cache and sync later
     }
   }
 
   window.storage = {
     get: async function (key) {
-      var all = readAll();
-      if (!Object.prototype.hasOwnProperty.call(all, key)) return null;
-      return { key: key, value: all[key], shared: false };
+      if (!Object.prototype.hasOwnProperty.call(cache, key)) return null;
+      return { key: key, value: cache[key], shared: true };
     },
     set: async function (key, value) {
-      var all = readAll();
-      all[key] = value;
-      writeAll(all);
-      return { key: key, value: value, shared: false };
+      cache[key] = value;
+      writeLocal(cache);
+      // Fire and forget - don't block UI on network
+      pushToFirestore(key, value, false);
+      return { key: key, value: value, shared: true };
     },
     delete: async function (key) {
-      var all = readAll();
-      delete all[key];
-      writeAll(all);
-      return { key: key, deleted: true, shared: false };
+      delete cache[key];
+      writeLocal(cache);
+      pushToFirestore(key, null, true);
+      return { key: key, deleted: true, shared: true };
     },
   };
+
+  // Expose a readiness promise for the app
+  window.__storageReady = firebaseReady;
 })();
 
 </script>
@@ -1544,6 +1653,42 @@ function OripaCalculator() {
       } catch (e) {}
       setLoaded(true);
     })();
+  }, []);
+
+  // Listen for remote updates from other devices (Firebase sync) and refresh state
+  useEffect(() => {
+    const handler = async (ev) => {
+      const key = ev.detail && ev.detail.key;
+      if (!key) return;
+      try {
+        const r = await window.storage.get(key, true);
+        const v = r && r.value;
+        if (key === "oripa:list") setOripaList(v ? JSON.parse(v) : []);
+        else if (key === "oripa:customers") setCustomers(v ? JSON.parse(v) : []);
+        else if (key === "oripa:sessions") setSessions(v ? JSON.parse(v) : []);
+        else if (key === "oripa:sessionStarts") setSessionStartTotals(v ? JSON.parse(v) : {});
+        else if (key === "oripa:settlements") setSettlements(v ? JSON.parse(v) : []);
+        else if (key === "oripa:staff") setStaff(v ? JSON.parse(v) : []);
+        else if (key === "oripa:shiftRequests") setShiftRequests(v ? JSON.parse(v) : []);
+        else if (key === "oripa:confirmedShifts") setConfirmedShifts(v ? JSON.parse(v) : []);
+        else if (key === "oripa:timePunches") setTimePunches(v ? JSON.parse(v) : []);
+        else if (key === "oripa:storeGeo") setStoreGeo(v ? JSON.parse(v) : null);
+        else if (key === "oripa:buyback") setBuybackItems(v ? JSON.parse(v) : []);
+        else if (key === "oripa:expenses") setExpenses(v ? JSON.parse(v) : []);
+        else if (key === "oripa:staffCompensation") setStaffCompensation(v ? JSON.parse(v) : {});
+        else if (key === "oripa:buybackDaily") setBuybackDaily(v ? JSON.parse(v) : {});
+        else if (key === "oripa:attendanceApprovals") setAttendanceApprovals(v ? JSON.parse(v) : {});
+        else if (key === "oripa:dailyPayrollFinalized") setDailyPayrollFinalized(v ? JSON.parse(v) : {});
+        else if (key === "oripa:inventory") setInventory(v ? JSON.parse(v) : []);
+        else if (key.startsWith("oripa:log:")) {
+          const id = key.slice("oripa:log:".length);
+          const parsed = v ? JSON.parse(v) : [];
+          setLogsById((prev) => ({ ...prev, [id]: parsed }));
+        }
+      } catch (e) { console.warn("remote sync error:", e); }
+    };
+    window.addEventListener("storage-remote-update", handler);
+    return () => window.removeEventListener("storage-remote-update", handler);
   }, []);
 
   const fetchLog = useCallback(async (id) => {
