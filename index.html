@@ -3387,12 +3387,12 @@ function SessionCard({ session, oripa, fullLog, onDraw, onWin, onHazure, onEnd, 
       </div>
 
       {showWinPicker && (() => {
-        // When "showDetails" is on: consumed cards vanish from picker (staff mode).
-        // When off: customer sees full inventory; only session-scoped double-tap of the same tier is ignored.
-        const tiersToShow = session.showDetails ? box.remainingTiers : oripa.tiers;
-        // tierIds this session already recorded (to prevent double-count on tap)
-        const sessionWonTierIds = new Set(sessionLog.filter((e) => e.type === "win" && e.tierId).map((e) => e.tierId));
-        if (tiersToShow.length === 0) {
+        // Shared across all sessions on this oripa: any tier won by anyone is "taken".
+        // staff mode (showDetails on): taken tiers vanish from picker
+        // customer mode (showDetails off): taken tiers stay visible but can't be tapped
+        const oripaWonTierIds = new Set(fullLog.filter((e) => e.type === "win" && e.tierId).map((e) => e.tierId));
+        const tiersToShow = oripa.tiers;
+        if (tiersToShow.length === 0 || (session.showDetails && oripaWonTierIds.size >= tiersToShow.length)) {
           return <div style={{ fontSize: 12, color: C.muted, textAlign: "center" }}>残りのあたりはありません</div>;
         }
         return (
@@ -3405,11 +3405,11 @@ function SessionCard({ session, oripa, fullLog, onDraw, onWin, onHazure, onEnd, 
             <RankGroupedPicker
               tiers={tiersToShow}
               isForeign={isForeign}
-              consumedIds={sessionWonTierIds}
+              consumedIds={oripaWonTierIds}
               hideWhenTaken={session.showDetails}
               onPick={(t) => {
-                if (sessionWonTierIds.has(t.id)) {
-                  // already picked this specific tier in this session - ignore
+                if (oripaWonTierIds.has(t.id)) {
+                  // already won by someone - ignore
                   return;
                 }
                 onWin(t);
