@@ -3199,9 +3199,13 @@ const RANK_GROUP_COLOR = { rainbow: C.gold, gold: "#D4A94A", silver: "#B8C0CC", 
 const RANK_GROUP_LABEL = { rainbow: "🌈 虹枠", gold: "🥇 金枠", silver: "🥈 銀枠", bronze: "🥉 銅枠", other: "その他" };
 const RANK_GROUP_ORDER = ["rainbow", "gold", "silver", "bronze", "other"];
 
-function RankGroupedPicker({ tiers, onPick, isForeign = false, consumedIds = null }) {
+function RankGroupedPicker({ tiers, onPick, isForeign = false, consumedIds = null, hideWhenTaken = false }) {
+  // When hideWhenTaken, filter out any tier that's already in consumedIds
+  const visibleTiers = (hideWhenTaken && consumedIds)
+    ? tiers.filter((t) => !consumedIds.has(t.id))
+    : tiers;
   const groups = {};
-  tiers.forEach((t) => {
+  visibleTiers.forEach((t) => {
     const key = RANK_GROUP_ORDER.includes(t.rank) ? t.rank : "other";
     if (!groups[key]) groups[key] = [];
     groups[key].push(t);
@@ -3401,10 +3405,11 @@ function SessionCard({ session, oripa, fullLog, onDraw, onWin, onHazure, onEnd, 
             <RankGroupedPicker
               tiers={tiersToShow}
               isForeign={isForeign}
-              consumedIds={session.showDetails ? null : sessionWonTierIds}
+              consumedIds={sessionWonTierIds}
+              hideWhenTaken={session.showDetails}
               onPick={(t) => {
-                if (!session.showDetails && sessionWonTierIds.has(t.id)) {
-                  // ignore double-tap of the same specific tier in this session
+                if (sessionWonTierIds.has(t.id)) {
+                  // already picked this specific tier in this session - ignore
                   return;
                 }
                 onWin(t);
