@@ -2609,11 +2609,11 @@ function StoreShell({
 }) {
   const baseTabs = [
     { key: "manage", label: "オリパ管理", icon: Settings2, admin: false },
-    { key: "buyback", label: "買取表", icon: ListPlus, admin: false },
+    { key: "buyback", label: "買取表管理", icon: ListPlus, admin: false },
     { key: "aggregate", label: "集計", icon: BarChart3, admin: true },
     { key: "daily", label: "本日/精算", icon: CalendarCheck, admin: true },
     { key: "customers", label: "お客様", icon: UserSearch, admin: true },
-    { key: "shift", label: "シフト調整", icon: CalendarCheck, admin: true },
+    { key: "shift", label: "シフト調整管理", icon: CalendarCheck, admin: true },
     { key: "finance", label: "経費・給与", icon: PercentCircle, admin: true },
     { key: "staffAdmin", label: "スタッフ管理", icon: Users, admin: true },
   ];
@@ -3080,19 +3080,25 @@ function RankGroupedPicker({ tiers, onPick, isForeign = false, consumedIds = nul
               return (
                 <button
                   key={t.id}
-                  onClick={() => onPick(t)}
-                  className="press flex flex-col items-start rounded-lg px-3 py-2"
+                  onClick={() => { if (!isTaken) onPick(t); }}
+                  disabled={isTaken}
+                  className="press flex flex-col items-start rounded-lg px-3 py-2 relative"
                   style={{
-                    background: C.surfaceAlt,
-                    border: `1px solid ${isTaken ? C.line : RANK_GROUP_COLOR[k]}`,
-                    opacity: isTaken ? 0.4 : 1,
+                    background: isTaken ? C.surface : C.surfaceAlt,
+                    border: `1px solid ${isTaken ? C.mint : RANK_GROUP_COLOR[k]}`,
+                    opacity: isTaken ? 0.55 : 1,
                     cursor: isTaken ? "default" : "pointer",
                   }}
                 >
-                  <span style={{ fontSize: 11, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%" }}>
+                  <span style={{ fontSize: 11, color: isTaken ? C.muted : C.paper, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%", textDecoration: isTaken ? "line-through" : "none" }}>
                     {t.name}
                   </span>
-                  <span style={{ fontFamily: FONT_MONO, fontWeight: 700, color: RANK_GROUP_COLOR[k], fontSize: 13 }}>{yen(priceOf(t))}</span>
+                  <span style={{ fontFamily: FONT_MONO, fontWeight: 700, color: isTaken ? C.muted : RANK_GROUP_COLOR[k], fontSize: 13, textDecoration: isTaken ? "line-through" : "none" }}>{yen(priceOf(t))}</span>
+                  {isTaken && (
+                    <span style={{ position: "absolute", top: 4, right: 4, fontSize: 8, fontWeight: 700, color: C.mint, background: "rgba(111,207,143,0.15)", borderRadius: 999, padding: "1px 6px" }}>
+                      ✓反映済
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -7218,6 +7224,7 @@ function AdminShiftZone({ staff, addStaff, updateStaff, deleteStaff, shiftReques
   const [seg, setSeg] = useState("confirmed");
   return (
     <div className="flex flex-col gap-3">
+      <AttendancePdfButton staff={staff} timePunches={timePunches} />
       <div className="flex gap-2 overflow-x-auto pb-1" style={{ WebkitOverflowScrolling: "touch" }}>
         {[
           ["confirmed", "確定シフト"],
@@ -7665,6 +7672,171 @@ function InventoryItemCard({ item, updateItem, deleteItem, recordSale }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ============================================================
+// ATTENDANCE REPORT PDF (勤怠表 for 社労士提出)
+// ============================================================
+function buildAttendanceReportHTML({ monthKey, staff, timePunches, storeName }) {
+  const [y, m] = monthKey.split("-").map(Number);
+  const lastDay = new Date(y, m, 0).getDate();
+  const monthDates = Array.from({ length: lastDay }, (_, i) => `${monthKey}-${String(i + 1).padStart(2, "0")}`);
+
+  // For each punch, pair in/out per day
+  const buildDayPairs = (staffId, dateKey) => {
+    const list = timePunches
+      .filter((p) => p.staffId === staffId && dateKeyOf(p.ts) === dateKey)
+      .sort((a, b) => a.ts - b.ts);
+    const pairs = [];
+    let lastIn = null;
+    list.forEach((p) => {
+      if (p.type === "in") {
+        if (lastIn !== null) pairs.push({ in: lastIn, out: null });
+        lastIn = p.ts;
+      } else if (p.type === "out") {
+        pairs.push({ in: lastIn, out: p.ts });
+        lastIn = null;
+      }
+    });
+    if (lastIn !== null) pairs.push({ in: lastIn, out: null });
+    return pairs;
+  };
+
+  const fmtTime = (ts) => ts == null ? "" : `${String(new Date(ts).getHours()).padStart(2, "0")}:${String(new Date(ts).getMinutes()).padStart(2, "0")}`;
+  const dayOfWeek = (dateKey) => {
+    const [yy, mm, dd] = dateKey.split("-").map(Number);
+    return ["日", "月", "火", "水", "木", "金", "土"][new Date(yy, mm - 1, dd).getDay()];
+  };
+
+  let html = `<h1>勤怠表 ${y}年${m}月</h1>`;
+  html += `<div class="meta">${storeName || "店舗"} / 発行日 ${new Date().toLocaleDateString("ja-JP")}</div>`;
+
+  // One section per staff
+  staff.forEach((member) => {
+    // Check if they have any punches this month
+    const hasAny = timePunches.some((p) => p.staffId === member.id && monthKeyOf(dateKeyOf(p.ts)) === monthKey);
+    if (!hasAny) return;
+
+    html += `<h2 style="page-break-before: always;">${esc(member.name)}</h2>`;
+
+    let totalMs = 0;
+    let workDays = 0;
+
+    html += `<table style="font-size: 11px;">
+      <thead>
+        <tr>
+          <th style="width:60px;">日付</th>
+          <th style="width:30px;">曜日</th>
+          <th class="num" style="width:70px;">出勤時刻</th>
+          <th class="num" style="width:70px;">退勤時刻</th>
+          <th class="num" style="width:70px;">勤務時間</th>
+          <th>備考</th>
+        </tr>
+      </thead>
+      <tbody>`;
+
+    monthDates.forEach((dateKey) => {
+      const pairs = buildDayPairs(member.id, dateKey);
+      const dow = dayOfWeek(dateKey);
+      const dowColor = dow === "日" ? "color:#c0392b;" : dow === "土" ? "color:#2874a6;" : "";
+      const dayNum = Number(dateKey.split("-")[2]);
+
+      if (pairs.length === 0) {
+        html += `<tr><td style="${dowColor}">${m}/${dayNum}</td><td style="${dowColor}">${dow}</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td></td></tr>`;
+      } else {
+        // Daily total (sum of in-out pairs)
+        let dayMs = 0;
+        pairs.forEach((p) => { if (p.in && p.out) dayMs += p.out - p.in; });
+        totalMs += dayMs;
+        if (dayMs > 0) workDays += 1;
+        const dayHours = (dayMs / 3600000).toFixed(2);
+
+        // If multiple pairs, show first in and last out but note extra pairs
+        const firstIn = pairs[0]?.in;
+        const lastPair = pairs[pairs.length - 1];
+        const lastOut = lastPair?.out;
+        const extraNote = pairs.length > 1 ? `${pairs.length}回打刻` : (pairs.some((p) => !p.out) ? "退勤未打刻" : "");
+
+        html += `<tr>
+          <td style="${dowColor}">${m}/${dayNum}</td>
+          <td style="${dowColor}">${dow}</td>
+          <td class="num">${fmtTime(firstIn)}</td>
+          <td class="num">${fmtTime(lastOut)}</td>
+          <td class="num"><b>${dayHours}h</b></td>
+          <td style="font-size:10px;color:#666;">${extraNote}</td>
+        </tr>`;
+      }
+    });
+
+    const totalHours = (totalMs / 3600000).toFixed(2);
+    html += `</tbody>
+      <tfoot>
+        <tr style="background:#f2f2f2;">
+          <td colspan="2"><b>合計</b></td>
+          <td class="num" colspan="2"><b>勤務 ${workDays} 日</b></td>
+          <td class="num"><b>${totalHours}h</b></td>
+          <td></td>
+        </tr>
+      </tfoot>
+    </table>`;
+
+    html += `<div style="margin-top: 20px; display: flex; justify-content: flex-end; gap: 40px; font-size: 11px;">
+      <div style="border-top: 1px solid #333; padding-top: 4px; min-width: 140px; text-align: center;">本人サイン</div>
+      <div style="border-top: 1px solid #333; padding-top: 4px; min-width: 140px; text-align: center;">責任者サイン</div>
+    </div>`;
+  });
+
+  const anyStaffHadPunches = staff.some((s) => timePunches.some((p) => p.staffId === s.id && monthKeyOf(dateKeyOf(p.ts)) === monthKey));
+  if (!anyStaffHadPunches) {
+    html += `<div style="color: #666; text-align: center; padding: 40px 0;">${y}年${m}月の打刻記録がありません</div>`;
+  }
+  return html;
+}
+
+// Button component for attendance PDF
+function AttendancePdfButton({ staff, timePunches }) {
+  const [open, setOpen] = useState(false);
+  const todayMonth = todayKey().slice(0, 7);
+  const [monthKey, setMonthKey] = useState(todayMonth);
+
+  const shiftMonth = (offset) => {
+    const [y, m] = monthKey.split("-").map(Number);
+    const d = new Date(y, m - 1 + offset, 1);
+    setMonthKey(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  };
+
+  const run = () => {
+    const html = buildAttendanceReportHTML({ monthKey, staff, timePunches, storeName: "トレぴ" });
+    openReportPrint(`勤怠表 ${monthKey}`, html);
+    setOpen(false);
+  };
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="press rounded-xl py-2.5" style={{ border: `1px solid ${C.gold}`, color: C.gold, fontSize: 12, fontWeight: 700 }}>
+        📄 勤怠表をPDFで出力(社労士提出用)
+      </button>
+    );
+  }
+
+  return (
+    <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.surface, border: `1px solid ${C.gold}` }}>
+      <div style={{ fontSize: 13, fontWeight: 700 }}>勤怠表(社労士提出用)</div>
+      <div style={{ fontSize: 11, color: C.muted }}>対象月を選び、PDF出力してください</div>
+      <div className="flex items-center gap-2">
+        <button onClick={() => shiftMonth(-1)} className="press rounded-lg px-3 py-2" style={{ background: C.surfaceAlt, color: C.paper }}>◀</button>
+        <span style={{ flex: 1, textAlign: "center", fontFamily: FONT_MONO, fontSize: 15, fontWeight: 700 }}>{monthKey}</span>
+        <button onClick={() => shiftMonth(1)} className="press rounded-lg px-3 py-2" style={{ background: C.surfaceAlt, color: C.paper }}>▶</button>
+      </div>
+      <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.5 }}>
+        含まれる内容: スタッフ別の日付・曜日・出勤時刻・退勤時刻・勤務時間、月合計(勤務日数・勤務時間)、本人サイン欄・責任者サイン欄
+      </div>
+      <div className="flex gap-2">
+        <button onClick={() => setOpen(false)} className="press flex-1 rounded-lg py-2" style={{ border: `1px solid ${C.line}`, color: C.paper, fontSize: 12 }}>キャンセル</button>
+        <button onClick={run} className="press flex-1 rounded-lg py-2" style={{ background: C.gold, color: C.ink, fontSize: 13, fontWeight: 700 }}>PDF出力</button>
+      </div>
     </div>
   );
 }
