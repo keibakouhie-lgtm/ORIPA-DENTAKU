@@ -3082,23 +3082,17 @@ function RankGroupedPicker({ tiers, onPick, isForeign = false, consumedIds = nul
                   key={t.id}
                   onClick={() => { if (!isTaken) onPick(t); }}
                   disabled={isTaken}
-                  className="press flex flex-col items-start rounded-lg px-3 py-2 relative"
+                  className="press flex flex-col items-start rounded-lg px-3 py-2"
                   style={{
-                    background: isTaken ? C.surface : C.surfaceAlt,
-                    border: `1px solid ${isTaken ? C.mint : RANK_GROUP_COLOR[k]}`,
-                    opacity: isTaken ? 0.55 : 1,
+                    background: C.surfaceAlt,
+                    border: `1px solid ${RANK_GROUP_COLOR[k]}`,
                     cursor: isTaken ? "default" : "pointer",
                   }}
                 >
-                  <span style={{ fontSize: 11, color: isTaken ? C.muted : C.paper, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%", textDecoration: isTaken ? "line-through" : "none" }}>
+                  <span style={{ fontSize: 11, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%" }}>
                     {t.name}
                   </span>
-                  <span style={{ fontFamily: FONT_MONO, fontWeight: 700, color: isTaken ? C.muted : RANK_GROUP_COLOR[k], fontSize: 13, textDecoration: isTaken ? "line-through" : "none" }}>{yen(priceOf(t))}</span>
-                  {isTaken && (
-                    <span style={{ position: "absolute", top: 4, right: 4, fontSize: 8, fontWeight: 700, color: C.mint, background: "rgba(111,207,143,0.15)", borderRadius: 999, padding: "1px 6px" }}>
-                      ✓反映済
-                    </span>
-                  )}
+                  <span style={{ fontFamily: FONT_MONO, fontWeight: 700, color: RANK_GROUP_COLOR[k], fontSize: 13 }}>{yen(priceOf(t))}</span>
                 </button>
               );
             })}
