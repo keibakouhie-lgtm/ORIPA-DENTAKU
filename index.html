@@ -2141,7 +2141,18 @@ function OripaCalculator() {
         )}
 
         {navTab === "store" && !storeUnlocked && (
-          <PasswordGate onUnlock={(mode) => { setStoreUnlockMode(mode); setStoreUnlocked(true); setStoreSubTab(mode === "staff" ? "clock" : "manage"); }} />
+          <PasswordGate onUnlock={(mode) => {
+            if (mode === "admin") {
+              setStoreUnlockMode("store");
+              setStoreUnlocked(true);
+              setAdminUnlocked(true);
+              setStoreSubTab("daily");
+            } else {
+              setStoreUnlockMode(mode);
+              setStoreUnlocked(true);
+              setStoreSubTab(mode === "staff" ? "clock" : "manage");
+            }
+          }} />
         )}
 
         {navTab === "store" && storeUnlocked && storeUnlockMode === "staff" && (
@@ -2154,7 +2165,7 @@ function OripaCalculator() {
             timePunches={timePunches}
             punch={punch}
             storeGeo={storeGeo}
-            onLock={() => { setStoreUnlocked(false); setStoreUnlockMode(null); }}
+            onLock={() => { setStoreUnlocked(false); setStoreUnlockMode(null); setAdminUnlocked(false); }}
           />
         )}
 
@@ -2162,7 +2173,7 @@ function OripaCalculator() {
             <StoreShell
               storeSubTab={storeSubTab}
               setStoreSubTab={setStoreSubTab}
-              onLock={() => { setStoreUnlocked(false); setStoreUnlockMode(null); }}
+              onLock={() => { setStoreUnlocked(false); setStoreUnlockMode(null); setAdminUnlocked(false); }}
               oripaList={oripaList}
               logsById={logsById}
               addOripa={addOripa}
@@ -2668,6 +2679,8 @@ function PasswordGate({ onUnlock }) {
       onUnlock("store");
     } else if (pw === STAFF_PASSWORD) {
       onUnlock("staff");
+    } else if (pw === ADMIN_PASSWORD) {
+      onUnlock("admin");
     } else {
       setErr(true);
       setPw("");
