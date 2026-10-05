@@ -2973,11 +2973,20 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, startSessio
     if (!oripaId && oripaList.length) setOripaId(oripaList[0].id);
   }, [oripaList, oripaId]);
 
-  // Exclude sessions that started before the last settlement (hidden from Active view, but kept in history)
+  // Exclude sessions that started before the last settlement/clear (hidden from Active view, but kept in history)
   const activeSessions = sessions.filter((s) => !s.endTs && s.startTs >= (lastSettledAt || 0)).sort((a, b) => b.startTs - a.startTs);
   const endedToday = sessions
-    .filter((s) => s.endTs && dateKeyOf(s.endTs) === todayKey())
+    .filter((s) => s.endTs && dateKeyOf(s.endTs) === todayKey() && s.endTs >= (lastSettledAt || 0))
     .sort((a, b) => b.endTs - a.endTs);
+
+  const clearActive = () => {
+    if (!confirm("営業中タブの表示を全てクリアします。履歴・集計は残ります。")) return;
+    const now = Date.now();
+    // bump lastSettledAt locally and persist via storage shim
+    try { window.storage.set("oripa:lastSettledAt", JSON.stringify(now), true); } catch (e) {}
+    // dispatch an event the top-level listener will catch and update the lastSettledAt state
+    try { window.dispatchEvent(new CustomEvent("storage-remote-update", { detail: { key: "oripa:lastSettledAt" } })); } catch (e) {}
+  };
 
   const nameSuggestions =
     name.trim().length > 0
@@ -3169,9 +3178,18 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, startSessio
 
       {endedToday.length > 0 && (
         <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-1.5" style={{ color: C.muted, fontSize: 12 }}>
-            <CalendarCheck size={13} />
-            <span>本日の終了済みお客様</span>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5" style={{ color: C.muted, fontSize: 12 }}>
+              <CalendarCheck size={13} />
+              <span>本日の終了済みお客様</span>
+            </div>
+            <button
+              onClick={clearActive}
+              className="press rounded-md px-2.5 py-1"
+              style={{ border: `1px solid ${C.coral}`, color: C.coral, fontSize: 10, fontWeight: 700 }}
+            >
+              クリア
+            </button>
           </div>
           {endedToday.map((s) => {
             const oripa = oripaList.find((o) => o.id === s.oripaId);
