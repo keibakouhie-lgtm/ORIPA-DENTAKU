@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>データ消去ツール</title>
+<style>
+body { font-family: -apple-system, sans-serif; max-width: 500px; margin: 40px auto; padding: 20px; background: #12151C; color: #E8E9ED; }
+h1 { font-size: 20px; }
+button { background: #E2694F; color: white; border: none; padding: 16px 24px; font-size: 16px; border-radius: 8px; cursor: pointer; width: 100%; margin: 12px 0; font-weight: 700; }
+button:disabled { background: #555; cursor: default; }
+.log { background: #1a1e26; padding: 12px; border-radius: 6px; font-family: monospace; font-size: 11px; white-space: pre-wrap; max-height: 300px; overflow: auto; }
+.keep { color: #6FCF8F; }
+.delete { color: #E2694F; }
+.ok { color: #6FCF8F; font-weight: 700; }
+</style>
+</head>
+<body>
+<h1>🗑️ テストデータ消去ツール</h1>
+<p>「基本データ」は残して、テストで作ったデータだけを削除します。</p>
+
+<p class="keep">✅ 残すもの: スタッフ / 時給交通費 / 買取参考価格 / GPS設定</p>
+<p class="delete">❌ 消すもの: オリパ / あたり履歴 / お客様 / セッション / シフト / 打刻 / 在庫 / 経費 / 精算 / 承認</p>
+
+<button id="wipe">テストデータを削除する</button>
+<button id="done" style="background:#6FCF8F;" onclick="window.close()" disabled>完了 - このタブを閉じる</button>
+
+<div id="log" class="log">準備中...</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
+<script>
+const logEl = document.getElementById("log");
+const btn = document.getElementById("wipe");
+const btnDone = document.getElementById("done");
+function log(msg) { logEl.textContent += msg + "\n"; logEl.scrollTop = logEl.scrollHeight; }
+
+firebase.initializeApp({
+  apiKey: "AIzaSyB8mS7AKtMAA_WWXjWGEnNgxrt2xOfXtbE",
+  authDomain: "torepi-store.firebaseapp.com",
+  projectId: "torepi-store",
+  storageBucket: "torepi-store.firebasestorage.app",
+  messagingSenderId: "650220062622",
+  appId: "1:650220062622:web:c91b5b5021cc60514e788f",
+});
+
+const KEEP = new Set(["oripa:staff", "oripa:staffCompensation", "oripa:buyback", "oripa:storeGeo", "oripa:wipedV1"]);
+
+(async () => {
+  try {
+    await firebase.auth().signInAnonymously();
+    log("✓ Firebase接続OK");
+    const db = firebase.firestore();
+    const snap = await db.collection("shared").doc("state").get();
+    if (!snap.exists) { log("データなし。既に空です。"); return; }
+    const data = snap.data();
+    log(`現在のキー数: ${Object.keys(data).length}`);
+    Object.keys(data).forEach(k => {
+      log(`  ${KEEP.has(k) ? "✅ 残す" : "❌ 削除"}: ${k}`);
+    });
+    btn.disabled = false;
+  } catch (e) {
+    log("ERR: " + e.message);
+  }
+})();
+
+btn.addEventListener("click", async () => {
+  btn.disabled = true;
+  btn.textContent = "削除中...";
+  try {
+    const db = firebase.firestore();
+    const snap = await db.collection("shared").doc("state").get();
+    const data = snap.data() || {};
+    const patch = {};
+    let count = 0;
+    Object.keys(data).forEach(k => {
+      if (!KEEP.has(k)) {
+        patch[k] = firebase.firestore.FieldValue.delete();
+        count++;
+      }
+    });
+    if (count === 0) { log("削除対象なし"); return; }
+    await db.collection("shared").doc("state").set(patch, { merge: true });
+    log(`\n✓ ${count}件のキーを削除しました`);
+    log(`\n各端末でアプリを再読み込みしてください。`);
+    btn.textContent = "✓ 削除完了";
+    btnDone.disabled = false;
+    btnDone.style.background = "#6FCF8F";
+
+    // Also clear localStorage on this browser for good measure
+    try {
+      localStorage.removeItem("oripa_app::__data");
+      log("ローカルキャッシュもクリア");
+    } catch(e){}
+  } catch (e) {
+    log("ERR: " + e.message);
+    btn.disabled = false;
+    btn.textContent = "再試行";
+  }
+});
+</script>
+</body>
+</html>
