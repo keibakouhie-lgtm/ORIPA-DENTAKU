@@ -1558,6 +1558,7 @@ function OripaCalculator() {
   const [attendanceApprovals, setAttendanceApprovals] = useState({}); // {"<staffId>_<dateKey>": true}
   const [dailyPayrollFinalized, setDailyPayrollFinalized] = useState({}); // {dateKey: amount}
   const [inventory, setInventory] = useState([]); // [{id, name, purchasePrice, purchaseDate, qty, condition, serial, memo, createdAt, sales: [{id, soldPrice, soldDate, soldTo, qty, note, profit}]}]
+  const [lastSettledAt, setLastSettledAt] = useState(0); // timestamp of last settleToday; sessions started before this are hidden from ActiveCustomers
 
   // ---- initial load ----
   useEffect(() => {
@@ -1651,6 +1652,10 @@ function OripaCalculator() {
         const r = await window.storage.get("oripa:inventory", true);
         if (r && r.value) setInventory(JSON.parse(r.value));
       } catch (e) {}
+      try {
+        const r = await window.storage.get("oripa:lastSettledAt", true);
+        if (r && r.value) setLastSettledAt(JSON.parse(r.value));
+      } catch (e) {}
       setLoaded(true);
     })();
   }, []);
@@ -1680,6 +1685,7 @@ function OripaCalculator() {
         else if (key === "oripa:attendanceApprovals") setAttendanceApprovals(v ? JSON.parse(v) : {});
         else if (key === "oripa:dailyPayrollFinalized") setDailyPayrollFinalized(v ? JSON.parse(v) : {});
         else if (key === "oripa:inventory") setInventory(v ? JSON.parse(v) : []);
+        else if (key === "oripa:lastSettledAt") setLastSettledAt(v ? JSON.parse(v) : 0);
         else if (key.startsWith("oripa:log:")) {
           const id = key.slice("oripa:log:".length);
           const parsed = v ? JSON.parse(v) : [];
@@ -2079,7 +2085,11 @@ function OripaCalculator() {
     const key = todayKey();
     if (settlements.some((s) => s.dateKey === key)) return;
     const stats = computeDailyStats(key, oripaList, logsById, sessions);
-    saveSettlements([...settlements, { id: uid(), ...stats, settledAt: Date.now(), edited: false }]);
+    const settledAt = Date.now();
+    saveSettlements([...settlements, { id: uid(), ...stats, settledAt, edited: false }]);
+    // Mark now as the last-settlement timestamp so ActiveCustomers can hide earlier sessions
+    setLastSettledAt(settledAt);
+    window.storage.set("oripa:lastSettledAt", JSON.stringify(settledAt), true).catch(() => {});
   };
   const updateSettlement = (id, updater) => {
     saveSettlements(settlements.map((s) => (s.id === id ? { ...updater(s), edited: true, editedAt: Date.now() } : s)));
@@ -2126,6 +2136,7 @@ function OripaCalculator() {
             recordSessionWin={recordSessionWin}
             setSessionHazureNotRedeemed={setSessionHazureNotRedeemed}
             undoLastSessionEntry={undoLastSessionEntry}
+            lastSettledAt={lastSettledAt}
           />
         )}
 
@@ -2938,7 +2949,7 @@ function StoreShell({
 }
 
 // ---------- STORE: 営業中のお客様管理 ----------
-function ActiveCustomers({ oripaList, logsById, sessions, customers, startSession, endSession, reopenSession, recordSessionDraw, recordSessionWin, setSessionHazureNotRedeemed, undoLastSessionEntry }) {
+function ActiveCustomers({ oripaList, logsById, sessions, customers, startSession, endSession, reopenSession, recordSessionDraw, recordSessionWin, setSessionHazureNotRedeemed, undoLastSessionEntry, lastSettledAt = 0 }) {
   const [formOpen, setFormOpen] = useState(false);
   const [name, setName] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -2962,7 +2973,8 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, startSessio
     if (!oripaId && oripaList.length) setOripaId(oripaList[0].id);
   }, [oripaList, oripaId]);
 
-  const activeSessions = sessions.filter((s) => !s.endTs).sort((a, b) => b.startTs - a.startTs);
+  // Exclude sessions that started before the last settlement (hidden from Active view, but kept in history)
+  const activeSessions = sessions.filter((s) => !s.endTs && s.startTs >= (lastSettledAt || 0)).sort((a, b) => b.startTs - a.startTs);
   const endedToday = sessions
     .filter((s) => s.endTs && dateKeyOf(s.endTs) === todayKey())
     .sort((a, b) => b.endTs - a.endTs);
