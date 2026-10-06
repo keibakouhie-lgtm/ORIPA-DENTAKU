@@ -5365,11 +5365,12 @@ function ShiftSubmit({ staff, shiftRequests, submitShiftRequest }) {
   const [name, setName] = useState("");
   const [periodStart, setPeriodStart] = useState(biweeklyPeriodStart(todayKey()));
   const days = biweeklyDates(periodStart);
-  const [entries, setEntries] = useState(() => days.map(makeDefaultEntry));
+  // All days default to 休み (empty start/end). Tap "勤務可能" to toggle on and populate default times.
+  const [entries, setEntries] = useState(() => days.map((d) => ({ date: d, start: "", end: "", note: "" })));
   const [submitted, setSubmitted] = useState(false);
 
   useEffect(() => {
-    setEntries(biweeklyDates(periodStart).map(makeDefaultEntry));
+    setEntries(biweeklyDates(periodStart).map((d) => ({ date: d, start: "", end: "", note: "" })));
     setSubmitted(false);
   }, [periodStart]);
 
@@ -5381,8 +5382,8 @@ function ShiftSubmit({ staff, shiftRequests, submitShiftRequest }) {
     if (!canSubmit) return;
     submitShiftRequest(name, periodStart, entries);
     setSubmitted(true);
-    // reset back to defaults
-    setEntries(days.map(makeDefaultEntry));
+    // reset all back to 休み
+    setEntries(days.map((d) => ({ date: d, start: "", end: "", note: "" })));
   };
 
   const myPastRequests = shiftRequests
@@ -5435,8 +5436,8 @@ function ShiftSubmit({ staff, shiftRequests, submitShiftRequest }) {
       </div>
 
       <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.5 }}>
-        全日「勤務可能」で初期表示されます(平日14:00-20:00 / 土日祝12:00-20:00)。<br/>
-        働けない日は「休み」ボタンに切り替えてください。時間も必要に応じて調整できます。
+        デフォルトは全日「休み」です。働ける日は「勤務可能」ボタンを押してください。<br/>
+        時間は自動で入ります(平日14:00-20:00 / 土日12:00-20:00)。必要に応じて調整できます。
       </div>
 
       <div className="flex flex-col gap-2">
@@ -5457,10 +5458,10 @@ function ShiftSubmit({ staff, shiftRequests, submitShiftRequest }) {
                     updEntry(i, "end", def.end);
                   }
                 }}
-                className="press rounded-full px-2.5 py-1"
-                style={{ background: isActive ? C.gold : C.surfaceAlt2, color: isActive ? C.ink : C.muted, fontSize: 10, fontWeight: 700, border: isActive ? "none" : `1px solid ${C.line}` }}
+                className="press rounded-full px-3 py-1"
+                style={{ background: isActive ? C.gold : C.surfaceAlt2, color: isActive ? C.ink : C.paper, fontSize: 11, fontWeight: 700, border: isActive ? "none" : `1px solid ${C.line}` }}
               >
-                {isActive ? "勤務可能" : "休み"}
+                {isActive ? "✓ 勤務可能" : "勤務可能"}
               </button>
             </div>
             {isActive && (
