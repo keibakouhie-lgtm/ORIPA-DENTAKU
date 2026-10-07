@@ -2777,12 +2777,12 @@ function StoreShell({
   recordSale,
 }) {
   const baseTabs = [
+    { key: "shift", label: "シフト調整管理", icon: CalendarCheck, admin: true },
     { key: "manage", label: "オリパ管理", icon: Settings2, admin: false },
     { key: "buyback", label: "買取表管理", icon: ListPlus, admin: false },
     { key: "aggregate", label: "集計", icon: BarChart3, admin: true },
     { key: "daily", label: "本日/精算", icon: CalendarCheck, admin: true },
     { key: "customers", label: "お客様", icon: UserSearch, admin: true },
-    { key: "shift", label: "シフト調整管理", icon: CalendarCheck, admin: true },
     { key: "finance", label: "経費・給与", icon: PercentCircle, admin: true },
     { key: "staffAdmin", label: "スタッフ管理", icon: Users, admin: true },
   ];
@@ -5360,6 +5360,56 @@ function PunchClock({ staff, addStaff, timePunches, punch, storeGeo }) {
         </button>
       </div>
 
+      {/* 今誰が出勤中かリアルタイム表示 */}
+      {(() => {
+        const today = todayKey();
+        // 今日の打刻を staffId ごとに時系列で集めて、最新が "in" の人を抽出
+        const byStaff = {};
+        timePunches.filter(p => dateKeyOf(p.ts) === today).sort((a, b) => a.ts - b.ts).forEach(p => {
+          if (!byStaff[p.staffId]) byStaff[p.staffId] = [];
+          byStaff[p.staffId].push(p);
+        });
+        const workingNow = [];
+        Object.keys(byStaff).forEach(sid => {
+          const list = byStaff[sid];
+          const last = list[list.length - 1];
+          if (last && last.type === "in") {
+            // 直近の in の時刻を取得
+            workingNow.push({ staffId: sid, staffName: last.staffName, inTs: last.ts });
+          }
+        });
+        const fmtTime = (ts) => { const d = new Date(ts); return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
+        return (
+          <div className="rounded-xl p-3" style={{ background: "rgba(111,207,143,0.08)", border: `1px solid ${C.mint}` }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.mint, marginBottom: 8 }}>
+              🟢 現在の出勤者({workingNow.length}名)
+            </div>
+            {workingNow.length === 0 ? (
+              <div style={{ fontSize: 12, color: C.muted, textAlign: "center", padding: "6px 0" }}>現在出勤中のスタッフはいません</div>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                {workingNow.sort((a, b) => a.inTs - b.inTs).map((w) => {
+                  const elapsed = Date.now() - w.inTs;
+                  const h = Math.floor(elapsed / 3600000);
+                  const m = Math.floor((elapsed % 3600000) / 60000);
+                  return (
+                    <div key={w.staffId} className="flex items-center justify-between rounded-lg px-3 py-2" style={{ background: C.surfaceAlt, border: `1px solid ${C.line}` }}>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 700 }}>{w.staffName}</div>
+                        <div style={{ fontSize: 10, color: C.muted, fontFamily: FONT_MONO }}>
+                          出勤 {fmtTime(w.inTs)} (経過 {h}h{String(m).padStart(2,"0")}m)
+                        </div>
+                      </div>
+                      <span style={{ fontSize: 10, color: C.mint, fontWeight: 700 }}>勤務中</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {busy && <div style={{ fontSize: 12, color: C.muted, textAlign: "center" }}>位置情報を確認しています…</div>}
 
       {msg && (
@@ -7222,6 +7272,9 @@ function ConfirmedShiftCalendar({ confirmedShifts, staff, timePunches, attendanc
   const today = todayKey();
   const [y, m] = today.split("-").map(Number);
   const [monthKey, setMonthKey] = useState(`${y}-${String(m).padStart(2, "0")}`);
+  // Default to current half (first=1〜15, second=16〜末)
+  const todayDay = Number(today.split("-")[2]);
+  const [viewHalf, setViewHalf] = useState(todayDay <= 15 ? "first" : "second");
 
   const [editHalf, setEditHalf] = useState(null); // "first" | "second" | null
   const [editEntries, setEditEntries] = useState([]);
@@ -7256,9 +7309,13 @@ function ConfirmedShiftCalendar({ confirmedShifts, staff, timePunches, attendanc
   // All dates of the current month
   const [cy, cm] = monthKey.split("-").map(Number);
   const lastDayOfMonth = new Date(cy, cm, 0).getDate();
-  const monthDates = Array.from({ length: lastDayOfMonth }, (_, i) =>
+  const allMonthDates = Array.from({ length: lastDayOfMonth }, (_, i) =>
     `${monthKey}-${String(i + 1).padStart(2, "0")}`
   );
+  // 現在表示している期間のみに絞る
+  const monthDates = viewHalf === "first"
+    ? allMonthDates.filter((d) => Number(d.split("-")[2]) <= 15)
+    : allMonthDates.filter((d) => Number(d.split("-")[2]) >= 16);
 
   // Discrepancy count for the whole month
   const discrepancyCount = allEntries.reduce((n, e) => {
@@ -7297,8 +7354,9 @@ function ConfirmedShiftCalendar({ confirmedShifts, staff, timePunches, attendanc
     return <div className="rounded-xl px-4 py-6 text-center" style={{ background: C.surface, border: `1px dashed ${C.line}`, color: C.muted, fontSize: 13 }}>まだ確定シフトはありません</div>;
   }
 
-  // Leading blanks for weekday alignment
-  const firstDow = new Date(cy, cm - 1, 1).getDay();
+  // Leading blanks for weekday alignment (based on first displayed date of the half)
+  const firstDisplayedDay = Number(monthDates[0].split("-")[2]);
+  const firstDow = new Date(cy, cm - 1, firstDisplayedDay).getDay();
 
   return (
     <div className="flex flex-col gap-3">
@@ -7309,6 +7367,36 @@ function ConfirmedShiftCalendar({ confirmedShifts, staff, timePunches, attendanc
           {cy}年{cm}月
         </span>
         <button onClick={() => shiftMonth(1)} className="press rounded-lg px-3 py-2" style={{ background: C.surfaceAlt, color: C.paper }}>▶</button>
+      </div>
+
+      {/* 前期/後期切替タブ */}
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          onClick={() => setViewHalf("first")}
+          className="press rounded-lg py-2.5"
+          style={{
+            background: viewHalf === "first" ? C.gold : C.surfaceAlt,
+            color: viewHalf === "first" ? C.ink : C.paper,
+            fontWeight: 700,
+            fontSize: 13,
+            border: `1px solid ${viewHalf === "first" ? C.gold : C.line}`,
+          }}
+        >
+          前期(1〜15日)
+        </button>
+        <button
+          onClick={() => setViewHalf("second")}
+          className="press rounded-lg py-2.5"
+          style={{
+            background: viewHalf === "second" ? C.gold : C.surfaceAlt,
+            color: viewHalf === "second" ? C.ink : C.paper,
+            fontWeight: 700,
+            fontSize: 13,
+            border: `1px solid ${viewHalf === "second" ? C.gold : C.line}`,
+          }}
+        >
+          後期(16〜{lastDayOfMonth}日)
+        </button>
       </div>
 
       {/* status chips for both halves + edit buttons */}
@@ -7360,77 +7448,182 @@ function ConfirmedShiftCalendar({ confirmedShifts, staff, timePunches, attendanc
         </div>
       )}
 
-      {/* Full month calendar grid */}
-      <div className="grid grid-cols-7 gap-1" style={{ fontSize: 10 }}>
-        {["日", "月", "火", "水", "木", "金", "土"].map((d) => (
-          <div key={d} className="text-center py-1" style={{ color: C.muted, fontWeight: 700 }}>{d}</div>
-        ))}
-        {Array.from({ length: firstDow }, (_, i) => <div key={`blank-${i}`} />)}
-        {monthDates.map((dk) => {
-          const [, , d] = dk.split("-").map(Number);
-          const dt = new Date(cy, cm - 1, d);
-          const isSat = dt.getDay() === 6;
-          const isSun = dt.getDay() === 0;
-          const half = halfOfDate(dk);
-          const inEditHalf = editHalf === half;
-          const rows = entriesForDate(dk);
-          return (
-            <div key={dk} className="rounded-md p-1.5 flex flex-col gap-1" style={{ background: C.surface, border: `1px solid ${inEditHalf ? C.gold : C.line}`, minHeight: 70 }}>
-              <div className="flex items-center justify-between">
-                <span style={{ fontSize: 11, fontWeight: 700, color: isSat ? "#4A90C2" : isSun ? C.coral : C.paper }}>{d}</span>
-                {inEditHalf && (
-                  <select
-                    onChange={(e) => { if (e.target.value) { addEntry(dk, e.target.value); e.target.value = ""; } }}
-                    className="press"
-                    style={{ fontSize: 8, background: C.surfaceAlt, color: C.gold, border: `1px solid ${C.line}`, borderRadius: 3, padding: "0 2px" }}
-                    value=""
-                  >
-                    <option value="">+</option>
-                    {staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
-                )}
-              </div>
-              {rows.length === 0 ? (
-                <div style={{ color: C.muted, fontSize: 9 }}>—</div>
-              ) : (
-                rows.map((e) => {
-                  const actual = actualRangeForDay(timePunches, e.staffId, e.date);
-                  const sd = actual && actual.hasIn ? minutesDiff(e.start, actual.start) : null;
-                  const ed = actual && actual.hasOut ? minutesDiff(e.end, actual.end) : null;
-                  const warn = !actual || !actual.hasIn || !actual.hasOut || (sd != null && Math.abs(sd) > 15) || (ed != null && Math.abs(ed) > 15);
-                  const approved = !!attendanceApprovals[`${e.staffId}_${e.date}`];
-                  const origIdx = editEntries.indexOf(e);
-                  return (
-                    <div key={e.staffId + "-" + e.date} style={{ borderLeft: `2px solid ${warn ? C.coral : C.mint}`, paddingLeft: 3 }}>
-                      <div style={{ fontSize: 9, fontWeight: 700, display: "flex", alignItems: "center", gap: 2 }}>
-                        {warn && <span style={{ color: C.coral }}>⚠</span>}
-                        {approved && <span style={{ color: C.mint }}>✓</span>}
-                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.staffName}</span>
-                      </div>
-                      {inEditHalf ? (
-                        <div className="flex items-center gap-0.5" style={{ fontSize: 9 }}>
-                          <input type="time" value={e.start} onChange={(ev) => updateEntry(origIdx, { start: ev.target.value })} style={{ ...inputStyle, padding: "1px 2px", fontSize: 9, width: 54, fontFamily: FONT_MONO }} />
-                          <input type="time" value={e.end} onChange={(ev) => updateEntry(origIdx, { end: ev.target.value })} style={{ ...inputStyle, padding: "1px 2px", fontSize: 9, width: 54, fontFamily: FONT_MONO }} />
-                          <button onClick={() => removeEntry(origIdx)} style={{ color: C.coral, fontSize: 10, padding: "0 2px" }}>×</button>
-                        </div>
-                      ) : (
-                        <div style={{ fontSize: 9, fontFamily: FONT_MONO, color: C.muted }}>
-                          {e.start}-{e.end}
-                        </div>
-                      )}
-                      {!inEditHalf && actual && (
-                        <div style={{ fontSize: 8, fontFamily: FONT_MONO, color: warn ? C.coral : C.muted }}>
-                          実: {actual.start}-{actual.end}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          );
-        })}
-      </div>
+      {/* 表形式のシフト表 - 縦:スタッフ 横:日付 */}
+      {(() => {
+        // この期間でシフトのあるスタッフを抽出(重複排除)
+        const staffWithShifts = {};
+        displayEntries.forEach((e) => {
+          if (monthDates.includes(e.date)) {
+            if (!staffWithShifts[e.staffId]) {
+              staffWithShifts[e.staffId] = { id: e.staffId, name: e.staffName };
+            }
+          }
+        });
+        const staffList = Object.values(staffWithShifts);
+        // 編集中は全スタッフを表示(新規追加用に)
+        const displayStaffList = editHalf !== null
+          ? [...staffList, ...staff.filter(s => !staffWithShifts[s.id])]
+          : staffList;
+
+        if (displayStaffList.length === 0) {
+          return <div className="rounded-xl px-4 py-6 text-center" style={{ background: C.surface, border: `1px dashed ${C.line}`, color: C.muted, fontSize: 13 }}>この期間のシフトはまだありません</div>;
+        }
+
+        const dowOf = (dk) => { const [, , d] = dk.split("-").map(Number); return new Date(cy, cm - 1, d).getDay(); };
+        const dowLabel = ["日","月","火","水","木","金","土"];
+        const nameColW = 68;
+        const dayColW = 54;
+
+        return (
+          <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", border: `1px solid ${C.line}`, borderRadius: 10, background: C.surface }}>
+            <table style={{ borderCollapse: "collapse", fontSize: 12, fontFamily: FONT_MONO, minWidth: nameColW + dayColW * monthDates.length }}>
+              <thead>
+                <tr style={{ background: C.surfaceAlt2 }}>
+                  <th style={{ position: "sticky", left: 0, zIndex: 2, background: C.surfaceAlt2, padding: "8px 6px", borderBottom: `1px solid ${C.line}`, borderRight: `1px solid ${C.line}`, color: C.muted, fontWeight: 700, textAlign: "left", width: nameColW, minWidth: nameColW, fontSize: 11 }}>名前</th>
+                  {monthDates.map((dk) => {
+                    const [, , d] = dk.split("-").map(Number);
+                    const dow = dowOf(dk);
+                    const isSat = dow === 6;
+                    const isSun = dow === 0;
+                    return (
+                      <th key={dk} style={{
+                        padding: "6px 2px",
+                        borderBottom: `1px solid ${C.line}`,
+                        borderRight: `1px solid ${C.line}`,
+                        textAlign: "center",
+                        width: dayColW,
+                        minWidth: dayColW,
+                        color: isSat ? "#4A90C2" : isSun ? C.coral : C.paper,
+                        fontWeight: 700,
+                      }}>
+                        <div style={{ fontSize: 14 }}>{d}</div>
+                        <div style={{ fontSize: 10, opacity: 0.8 }}>{dowLabel[dow]}</div>
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {displayStaffList.map((s, rowIdx) => (
+                  <tr key={s.id} style={{ background: rowIdx % 2 === 0 ? C.surface : C.surfaceAlt }}>
+                    <td style={{
+                      position: "sticky", left: 0, zIndex: 1,
+                      background: rowIdx % 2 === 0 ? C.surface : C.surfaceAlt,
+                      padding: "6px 6px",
+                      borderBottom: `1px solid ${C.line}`,
+                      borderRight: `1px solid ${C.line}`,
+                      fontWeight: 700, fontFamily: FONT_BODY, fontSize: 12,
+                      width: nameColW, minWidth: nameColW,
+                      wordBreak: "break-all",
+                    }}>
+                      {s.name}
+                    </td>
+                    {monthDates.map((dk) => {
+                      const entry = displayEntries.find((e) => e.staffId === s.id && e.date === dk);
+                      const half = halfOfDate(dk);
+                      const inEditHalf = editHalf === half;
+                      const dow = dowOf(dk);
+                      const isWeekend = dow === 0 || dow === 6;
+                      const cellBg = isWeekend ? "rgba(74,144,194,0.05)" : "transparent";
+                      let content;
+                      if (entry) {
+                        const actual = actualRangeForDay(timePunches, s.id, dk);
+                        const sd = actual && actual.hasIn ? minutesDiff(entry.start, actual.start) : null;
+                        const ed = actual && actual.hasOut ? minutesDiff(entry.end, actual.end) : null;
+                        const warn = !actual || !actual.hasIn || !actual.hasOut || (sd != null && Math.abs(sd) > 15) || (ed != null && Math.abs(ed) > 15);
+                        const approved = !!attendanceApprovals[`${s.id}_${dk}`];
+                        const origIdx = editEntries.indexOf(entry);
+                        if (inEditHalf) {
+                          content = (
+                            <div className="flex flex-col items-center gap-0.5">
+                              <input type="time" value={entry.start} onChange={(ev) => updateEntry(origIdx, { start: ev.target.value })} style={{ ...inputStyle, padding: "1px 2px", fontSize: 9, width: 46, fontFamily: FONT_MONO }} />
+                              <input type="time" value={entry.end} onChange={(ev) => updateEntry(origIdx, { end: ev.target.value })} style={{ ...inputStyle, padding: "1px 2px", fontSize: 9, width: 46, fontFamily: FONT_MONO }} />
+                              <button onClick={() => removeEntry(origIdx)} style={{ color: C.coral, fontSize: 10 }}>×</button>
+                            </div>
+                          );
+                        } else {
+                          content = (
+                            <div style={{ textAlign: "center", color: warn ? C.coral : C.paper, lineHeight: 1.2 }}>
+                              {warn && <span style={{ color: C.coral }}>⚠</span>}
+                              {approved && <span style={{ color: C.mint }}>✓</span>}
+                              <div style={{ fontSize: 11, fontFamily: FONT_MONO, fontWeight: 700 }}>
+                                {entry.start.replace(":00","")}-{entry.end.replace(":00","")}
+                              </div>
+                              {actual && (
+                                <div style={{ fontSize: 8, color: warn ? C.coral : C.muted, marginTop: 1 }}>
+                                  実{actual.start.replace(":00","")}-{actual.end.replace(":00","")}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }
+                      } else {
+                        if (inEditHalf) {
+                          content = (
+                            <button
+                              onClick={() => addEntry(dk, s.id)}
+                              style={{ fontSize: 11, color: C.gold, border: `1px dashed ${C.line}`, borderRadius: 4, padding: "2px 6px", background: "transparent" }}
+                            >
+                              + 追加
+                            </button>
+                          );
+                        } else {
+                          content = <span style={{ color: C.muted, fontSize: 11 }}>休</span>;
+                        }
+                      }
+                      return (
+                        <td key={dk} style={{
+                          padding: "4px 2px",
+                          borderBottom: `1px solid ${C.line}`,
+                          borderRight: `1px solid ${C.line}`,
+                          textAlign: "center",
+                          verticalAlign: "middle",
+                          width: dayColW,
+                          minWidth: dayColW,
+                          background: cellBg,
+                        }}>
+                          {content}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+                {/* 出勤人数行 */}
+                <tr style={{ background: C.surfaceAlt2 }}>
+                  <td style={{
+                    position: "sticky", left: 0, zIndex: 1,
+                    background: C.surfaceAlt2,
+                    padding: "6px 6px",
+                    borderBottom: `1px solid ${C.line}`,
+                    borderRight: `1px solid ${C.line}`,
+                    fontWeight: 700, color: C.muted, fontSize: 11,
+                    width: nameColW, minWidth: nameColW,
+                  }}>
+                    出勤
+                  </td>
+                  {monthDates.map((dk) => {
+                    const count = displayEntries.filter((e) => e.date === dk).length;
+                    return (
+                      <td key={dk} style={{
+                        padding: "6px 2px",
+                        borderBottom: `1px solid ${C.line}`,
+                        borderRight: `1px solid ${C.line}`,
+                        textAlign: "center",
+                        color: count === 0 ? C.muted : C.gold,
+                        fontWeight: 700,
+                        fontSize: 12,
+                        width: dayColW, minWidth: dayColW,
+                      }}>
+                        {count}人
+                      </td>
+                    );
+                  })}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        );
+      })()}
 
       {/* Discrepancy details list */}
       {editHalf === null && (() => {
