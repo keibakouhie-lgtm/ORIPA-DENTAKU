@@ -430,7 +430,6 @@ const ClipboardPaste = makeIcon(
   </>
 );
 
-
 // ---------- design tokens ----------
 const C = {
   ink: "#12151C",
@@ -466,7 +465,37 @@ const newOripa = (n) => ({
   tiers: [],
   lastOne: { enabled: false, name: "ラストワン賞", amount: 0 },
   minGuarantee: { enabled: false, amount: 0, applyToAll: false, targetRate: 0 },
+  foreignPctOffset: -3, // 外国人向け自動計算: 封入額×(100+offset)%  (-3=3%引き)
 });
+
+// Compute foreign price for a tier: explicit amountForeign wins; otherwise amount × (1 + offset/100).
+// Returns null if base amount missing.
+function foreignPriceOf(oripa, tier) {
+  // 外国人価格は常に100円単位で切り捨て
+  if (tier.amountForeign != null && tier.amountForeign !== "") {
+    return Math.floor((Number(tier.amountForeign) || 0) / 100) * 100;
+  }
+  const base = Number(tier.amount) || 0;
+  if (base <= 0) return 0;
+  const offset = Number(oripa && oripa.foreignPctOffset);
+  const pct = isFinite(offset) ? offset : -3;
+  return Math.floor((base * (1 + pct / 100)) / 100) * 100;
+}
+
+// 万単位ショートカット: 「7」→70000, 「6.5」→65000, 「0.85」→8500
+// value <= 100 and > 0 かつ "0" 単体でなければ ×10000 する
+function expandManShortcut(raw) {
+  if (raw == null || raw === "") return raw;
+  const s = String(raw).trim();
+  if (!/^-?\d*(\.\d+)?$/.test(s)) return raw;
+  const n = Number(s);
+  if (!isFinite(n)) return raw;
+  // 100以下の正の数(整数or小数)で、「0」単体や「10000以上の値」でない
+  if (n > 0 && n <= 100) {
+    return Math.round(n * 10000);
+  }
+  return n;
+}
 
 // pure calc: real-time "design dashboard" numbers while building/editing an oripa
 const RANK_KEYS = ["rainbow", "gold", "silver", "bronze", "other"];
@@ -1993,7 +2022,7 @@ function OripaCalculator() {
     }));
   };
 
-  const startSession = (customerName, oripaId, isForeign, showDetails) => {
+  const startSession = (customerName, oripaId, isForeign, showDetails, staffId) => {
     const trimmed = (customerName || "").trim();
     if (!trimmed || !oripaId) return;
     const oripa = oripaList.find((o) => o.id === oripaId);
@@ -2009,6 +2038,10 @@ function OripaCalculator() {
       newCustomers = [...customers, customer];
     }
     saveCustomers(newCustomers);
+    const staffMember = staffId ? staff.find((st) => st.id === staffId) : null;
+    const initialAssignment = staffMember
+      ? [{ staffId: staffMember.id, staffName: staffMember.name, ts: now }]
+      : [];
     const session = {
       id: uid(),
       customerId: customer.id,
@@ -2017,17 +2050,40 @@ function OripaCalculator() {
       oripaName: oripa.name,
       isForeign: !!isForeign,
       showDetails: !!showDetails,
+      staffId: staffMember ? staffMember.id : null,
+      staffName: staffMember ? staffMember.name : "",
+      staffAssignments: initialAssignment,
       startTs: now,
       endTs: null,
     };
     saveSessions([...sessions, session]);
     ensureLogLoaded(oripa.id);
+    try { window.storage.set("oripa:lastStaffId", JSON.stringify(staffMember ? staffMember.id : ""), true); } catch (e) {}
   };
   const endSession = (sessionId) => {
     saveSessions(sessions.map((s) => (s.id === sessionId ? { ...s, endTs: Date.now() } : s)));
   };
   const reopenSession = (sessionId) => {
     saveSessions(sessions.map((s) => (s.id === sessionId ? { ...s, endTs: null } : s)));
+  };
+  const assignSessionStaff = (sessionId, staffId) => {
+    const staffMember = staff.find((st) => st.id === staffId);
+    if (!staffMember) return;
+    const now = Date.now();
+    saveSessions(sessions.map((s) => {
+      if (s.id !== sessionId) return s;
+      const prev = Array.isArray(s.staffAssignments) ? s.staffAssignments : [];
+      // 同じ担当者なら追加しない
+      const last = prev[prev.length - 1];
+      if (last && last.staffId === staffMember.id) return s;
+      return {
+        ...s,
+        staffId: staffMember.id,
+        staffName: staffMember.name,
+        staffAssignments: [...prev, { staffId: staffMember.id, staffName: staffMember.name, ts: now }],
+      };
+    }));
+    try { window.storage.set("oripa:lastStaffId", JSON.stringify(staffMember.id), true); } catch (e) {}
   };
 
   const recordSessionDraw = (session) => {
@@ -2042,8 +2098,8 @@ function OripaCalculator() {
     const entries = [{ id: uid(), type: "draw", ts: Date.now(), cost: Number(oripa.price) || 0, sessionId: session.id }];
     let awardLastOne = false;
     if (oripa.lastOne.enabled && totalSlots > 0 && newDraws === totalSlots && !lastOneAwarded) {
-      const lastOneAmount = session.isForeign && oripa.lastOne.amountForeign != null && oripa.lastOne.amountForeign !== ""
-        ? Number(oripa.lastOne.amountForeign) || 0
+      const lastOneAmount = session.isForeign
+        ? foreignPriceOf(oripa, { amount: oripa.lastOne.amount, amountForeign: oripa.lastOne.amountForeign })
         : Number(oripa.lastOne.amount) || 0;
       entries.push({
         id: uid(),
@@ -2060,8 +2116,9 @@ function OripaCalculator() {
     if (awardLastOne) fireStamp("lastone");
   };
   const recordSessionWin = (session, tier) => {
-    const amount = session.isForeign && tier.amountForeign != null && tier.amountForeign !== ""
-      ? Number(tier.amountForeign) || 0
+    const oripa = oripaList.find((o) => o.id === session.oripaId);
+    const amount = session.isForeign
+      ? foreignPriceOf(oripa, tier)
       : Number(tier.amount) || 0;
     appendLog(session.oripaId, [
       { id: uid(), type: "win", ts: Date.now(), name: tier.name, amount: amount, tierId: tier.id, sessionId: session.id },
@@ -2129,6 +2186,7 @@ function OripaCalculator() {
             logsById={logsById}
             sessions={sessions}
             customers={customers}
+            staff={staff}
             startSession={startSession}
             endSession={endSession}
             reopenSession={reopenSession}
@@ -2136,6 +2194,7 @@ function OripaCalculator() {
             recordSessionWin={recordSessionWin}
             setSessionHazureNotRedeemed={setSessionHazureNotRedeemed}
             undoLastSessionEntry={undoLastSessionEntry}
+            assignSessionStaff={assignSessionStaff}
             lastSettledAt={lastSettledAt}
           />
         )}
@@ -2165,6 +2224,8 @@ function OripaCalculator() {
             timePunches={timePunches}
             punch={punch}
             storeGeo={storeGeo}
+            oripaList={oripaList}
+            logsById={logsById}
             onLock={() => { setStoreUnlocked(false); setStoreUnlockMode(null); setAdminUnlocked(false); }}
           />
         )}
@@ -2962,7 +3023,7 @@ function StoreShell({
 }
 
 // ---------- STORE: 営業中のお客様管理 ----------
-function ActiveCustomers({ oripaList, logsById, sessions, customers, startSession, endSession, reopenSession, recordSessionDraw, recordSessionWin, setSessionHazureNotRedeemed, undoLastSessionEntry, lastSettledAt = 0 }) {
+function ActiveCustomers({ oripaList, logsById, sessions, customers, staff = [], startSession, endSession, reopenSession, recordSessionDraw, recordSessionWin, setSessionHazureNotRedeemed, undoLastSessionEntry, assignSessionStaff, lastSettledAt = 0 }) {
   const [formOpen, setFormOpen] = useState(false);
   const [name, setName] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -2971,6 +3032,19 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, startSessio
   const [showDetails, setShowDetails] = useState(false);
   const [hiddenRevealed, setHiddenRevealed] = useState(false);
   const [hiddenTapCount, setHiddenTapCount] = useState(0);
+  const [staffId, setStaffId] = useState("");
+  // 最後に選んだスタッフを復元
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await window.storage.get("oripa:lastStaffId", true);
+        if (r) {
+          const parsed = JSON.parse(r);
+          if (parsed && staff.some((s) => s.id === parsed)) setStaffId(parsed);
+        }
+      } catch (e) {}
+    })();
+  }, [staff.length]);
   const tapHidden = () => {
     if (hiddenRevealed) return;
     const next = hiddenTapCount + 1;
@@ -3011,7 +3085,7 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, startSessio
 
   const submit = () => {
     if (!name.trim() || !oripaId) return;
-    startSession(name, oripaId, isForeign, showDetails);
+    startSession(name, oripaId, isForeign, showDetails, staffId || null);
     setName("");
     setIsForeign(false);
     setShowDetails(false);
@@ -3114,6 +3188,30 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, startSessio
             </div>
           </div>
 
+          <div>
+            <label style={labelStyle}>対応スタッフ</label>
+            {staff.length === 0 ? (
+              <div className="rounded-lg px-3 py-2.5" style={{ background: C.surfaceAlt, border: `1px dashed ${C.line}`, color: C.muted, fontSize: 11 }}>
+                従業員リストに未登録です(店舗管理 → シフト調整管理 で登録できます)
+              </div>
+            ) : (
+              <select
+                value={staffId}
+                onChange={(e) => {
+                  setStaffId(e.target.value);
+                  setShowSuggestions(false);
+                }}
+                onFocus={() => setShowSuggestions(false)}
+                style={{ ...inputStyle, fontFamily: FONT_BODY }}
+              >
+                <option value="">— 未指定 —</option>
+                {staff.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+
           {/* hidden staff-only toggle: tap the tiny dot to unlock */}
           {hiddenRevealed ? (
             <div
@@ -3178,11 +3276,13 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, startSessio
                 session={s}
                 oripa={oripa}
                 fullLog={logsById[oripa.id] || []}
+                staff={staff}
                 onDraw={() => recordSessionDraw(s)}
                 onWin={(t) => recordSessionWin(s, t)}
                 onHazure={(count) => setSessionHazureNotRedeemed(s, count)}
                 onEnd={() => endSession(s.id)}
                 onUndo={() => undoLastSessionEntry(s)}
+                onAssignStaff={(sid) => assignSessionStaff && assignSessionStaff(s.id, sid)}
               />
             );
           })}
@@ -3219,6 +3319,17 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, startSessio
                   <div style={{ fontSize: 11, color: C.muted }}>
                     {totals.drawCount}口 ・ {yen(totals.totalSpent)} → {yen(totals.totalPayout)}
                   </div>
+                  {(() => {
+                    const assigns = Array.isArray(s.staffAssignments) ? s.staffAssignments : [];
+                    const label = assigns.length > 0
+                      ? assigns.map((a) => a.staffName).join(" → ")
+                      : (s.staffName || "");
+                    return label ? (
+                      <div style={{ fontSize: 10, color: C.gold, marginTop: 1 }}>
+                        担当: {label}{assigns.length > 1 ? `(交代${assigns.length - 1}回)` : ""}
+                      </div>
+                    ) : null;
+                  })()}
                 </div>
                 <div className="flex items-center gap-3">
                   <span style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 13, color: dColor }}>
@@ -3242,7 +3353,7 @@ const RANK_GROUP_COLOR = { rainbow: C.gold, gold: "#D4A94A", silver: "#B8C0CC", 
 const RANK_GROUP_LABEL = { rainbow: "🌈 虹枠", gold: "🥇 金枠", silver: "🥈 銀枠", bronze: "🥉 銅枠", other: "その他" };
 const RANK_GROUP_ORDER = ["rainbow", "gold", "silver", "bronze", "other"];
 
-function RankGroupedPicker({ tiers, onPick, isForeign = false, consumedIds = null, hideWhenTaken = false }) {
+function RankGroupedPicker({ tiers, onPick, isForeign = false, consumedIds = null, hideWhenTaken = false, oripa = null }) {
   // When hideWhenTaken, filter out any tier that's already in consumedIds
   const visibleTiers = (hideWhenTaken && consumedIds)
     ? tiers.filter((t) => !consumedIds.has(t.id))
@@ -3254,8 +3365,8 @@ function RankGroupedPicker({ tiers, onPick, isForeign = false, consumedIds = nul
     groups[key].push(t);
   });
 
-  const priceOf = (t) => isForeign && t.amountForeign != null && t.amountForeign !== ""
-    ? Number(t.amountForeign) || 0
+  const priceOf = (t) => isForeign
+    ? foreignPriceOf(oripa, t)
     : Number(t.amount) || 0;
 
   return (
@@ -3295,10 +3406,16 @@ function RankGroupedPicker({ tiers, onPick, isForeign = false, consumedIds = nul
   );
 }
 
-function SessionCard({ session, oripa, fullLog, onDraw, onWin, onHazure, onEnd, onUndo }) {
+function SessionCard({ session, oripa, fullLog, staff = [], onDraw, onWin, onHazure, onEnd, onUndo, onAssignStaff }) {
   const [notRedeemedInput, setNotRedeemedInput] = useState(null);
   const [showWinPicker, setShowWinPicker] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showStaffPicker, setShowStaffPicker] = useState(false);
+  const [showStaffHistory, setShowStaffHistory] = useState(false);
+  const staffAssignments = Array.isArray(session.staffAssignments) ? session.staffAssignments : [];
+  const currentStaffName = staffAssignments.length > 0
+    ? staffAssignments[staffAssignments.length - 1].staffName
+    : (session.staffName || "");
   const sessionLog = useMemo(() => fullLog.filter((e) => e.sessionId === session.id), [fullLog, session.id]);
   const guaranteeAmount = oripa.minGuarantee.enabled ? Number(oripa.minGuarantee.amount) || 0 : 0;
   const totals = useMemo(() => computeTotals(sessionLog, guaranteeAmount), [sessionLog, guaranteeAmount]);
@@ -3316,14 +3433,12 @@ function SessionCard({ session, oripa, fullLog, onDraw, onWin, onHazure, onEnd, 
   // when foreign session, show remaining prize based on foreign amounts
   const remainingWinTotalForSession = useMemo(() => {
     const tiersSum = box.remainingTiers.reduce((a, t) => {
-      const amt = isForeign && t.amountForeign != null && t.amountForeign !== ""
-        ? Number(t.amountForeign) || 0
-        : Number(t.amount) || 0;
+      const amt = isForeign ? foreignPriceOf(oripa, t) : (Number(t.amount) || 0);
       return a + amt;
     }, 0);
     const lastOne = oripa.lastOne.enabled && !box.lastOneAwarded && Number(oripa.totalSlots) > 0
-      ? (isForeign && oripa.lastOne.amountForeign != null && oripa.lastOne.amountForeign !== ""
-          ? Number(oripa.lastOne.amountForeign) || 0
+      ? (isForeign
+          ? foreignPriceOf(oripa, { amount: oripa.lastOne.amount, amountForeign: oripa.lastOne.amountForeign })
           : Number(oripa.lastOne.amount) || 0)
       : 0;
     return tiersSum + lastOne;
@@ -3332,7 +3447,7 @@ function SessionCard({ session, oripa, fullLog, onDraw, onWin, onHazure, onEnd, 
   return (
     <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
       <div className="flex items-center justify-between">
-        <div>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div className="flex items-center gap-2">
             <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15 }}>{session.customerName}</div>
             {isForeign && (
@@ -3346,6 +3461,80 @@ function SessionCard({ session, oripa, fullLog, onDraw, onWin, onHazure, onEnd, 
         <button onClick={onEnd} className="press rounded-lg px-3 py-1.5" style={{ border: `1px solid ${C.line}`, color: C.muted, fontSize: 12 }}>
           終了
         </button>
+      </div>
+
+      {/* 担当スタッフ */}
+      <div className="rounded-lg px-3 py-2 flex flex-col gap-1.5" style={{ background: C.surfaceAlt, border: `1px solid ${C.line}` }}>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2" style={{ minWidth: 0, flex: 1 }}>
+            <span style={{ fontSize: 10, color: C.muted }}>担当</span>
+            <span style={{ fontFamily: FONT_BODY, fontWeight: 700, fontSize: 13, color: currentStaffName ? C.paper : C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {currentStaffName || "未指定"}
+            </span>
+            {staffAssignments.length > 1 && (
+              <button
+                onClick={() => setShowStaffHistory(!showStaffHistory)}
+                className="press rounded-md px-2"
+                style={{ fontSize: 10, color: C.muted, border: `1px solid ${C.line}`, lineHeight: "20px" }}
+              >
+                交代{staffAssignments.length - 1}回
+              </button>
+            )}
+          </div>
+          <button
+            onClick={() => setShowStaffPicker(!showStaffPicker)}
+            className="press rounded-md px-2 py-1"
+            style={{ border: `1px solid ${C.gold}`, color: C.gold, fontSize: 10, fontWeight: 700 }}
+          >
+            {showStaffPicker ? "閉じる" : currentStaffName ? "担当変更" : "担当設定"}
+          </button>
+        </div>
+        {showStaffHistory && staffAssignments.length > 0 && (
+          <div className="flex flex-col gap-1 pt-1" style={{ borderTop: `1px dashed ${C.line}` }}>
+            {staffAssignments.map((a, i) => (
+              <div key={i} className="flex items-center justify-between" style={{ fontSize: 10, color: C.muted }}>
+                <span>
+                  {i === 0 ? "開始" : `交代${i}`}: {a.staffName}
+                </span>
+                <span style={{ fontFamily: FONT_MONO }}>
+                  {new Date(a.ts).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" })}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        {showStaffPicker && (
+          <div className="flex flex-wrap gap-1.5 pt-1" style={{ borderTop: `1px dashed ${C.line}` }}>
+            {staff.length === 0 ? (
+              <span style={{ fontSize: 10, color: C.muted }}>従業員が登録されていません</span>
+            ) : (
+              staff.map((st) => {
+                const isCurrent = staffAssignments.length > 0 && staffAssignments[staffAssignments.length - 1].staffId === st.id;
+                return (
+                  <button
+                    key={st.id}
+                    onClick={() => {
+                      if (!isCurrent && onAssignStaff) onAssignStaff(st.id);
+                      setShowStaffPicker(false);
+                    }}
+                    disabled={isCurrent}
+                    className="press rounded-md px-2.5 py-1"
+                    style={{
+                      background: isCurrent ? C.gold : C.surfaceAlt2,
+                      color: isCurrent ? C.ink : C.paper,
+                      border: `1px solid ${isCurrent ? C.gold : C.line}`,
+                      fontSize: 11,
+                      fontWeight: 700,
+                      opacity: isCurrent ? 0.6 : 1,
+                    }}
+                  >
+                    {st.name}{isCurrent ? " (現在)" : ""}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        )}
       </div>
 
       {Number(oripa.totalSlots) > 0 && !!session.showDetails && (
@@ -3450,6 +3639,7 @@ function SessionCard({ session, oripa, fullLog, onDraw, onWin, onHazure, onEnd, 
               isForeign={isForeign}
               consumedIds={oripaWonTierIds}
               hideWhenTaken={session.showDetails}
+              oripa={oripa}
               onPick={(t) => {
                 if (oripaWonTierIds.has(t.id)) {
                   // already won by someone - ignore
@@ -4530,6 +4720,27 @@ function DesignDashboard({ oripa }) {
         <StatBlock label="現在の総還元額" value={yen(s.currentTotal)} color={C.mint} />
       </div>
 
+      {(() => {
+        const zennou = (Number(s.totalSales) || 0) - (Number(s.currentTotal) || 0);
+        const positive = zennou >= 0;
+        const color = positive ? C.mint : C.coral;
+        const bg = positive ? "rgba(111,207,143,0.10)" : "rgba(226,105,79,0.10)";
+        return (
+          <div
+            className="rounded-lg px-3 py-2.5 flex items-center justify-between"
+            style={{ background: bg, border: `1px solid ${color}` }}
+          >
+            <div className="flex flex-col">
+              <span style={{ fontSize: 11, color: C.muted }}>全納時(総売上 − 現在の総還元額)</span>
+              <span style={{ fontSize: 10, color: C.muted }}>全口完売した場合の店の収支</span>
+            </div>
+            <span style={{ fontFamily: FONT_MONO, fontSize: 17, fontWeight: 800, color }}>
+              {positive ? "+" : "−"}{yen(Math.abs(zennou))}
+            </span>
+          </div>
+        );
+      })()}
+
       <div className="flex justify-between items-center pt-2" style={{ borderTop: `1px dashed ${C.line}` }}>
         <span style={{ fontSize: 12, color: C.muted }}>現在の還元率(目標{s.targetRate || 0}%)</span>
         <span style={{ fontFamily: FONT_MONO, fontSize: 15, fontWeight: 700, color: C.paper }}>
@@ -4848,17 +5059,22 @@ function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, delete
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [editingTierId, setEditingTierId] = useState(null);
+  const [editDraft, setEditDraft] = useState(null); // { name, amount, amountForeign, rank }
+  const [swipedTierId, setSwipedTierId] = useState(null); // revealing delete
 
   const set = (updater) => updateOripa(oripa.id, updater);
 
   const addTier = () => {
     if (!newTierName.trim() || newTierAmount === "") return;
     const count = Math.max(1, Math.min(999, parseInt(newTierCount, 10) || 1));
+    const resolvedAmount = expandManShortcut(newTierAmount);
+    const resolvedForeign = newTierAmountForeign === "" ? null : expandManShortcut(newTierAmountForeign);
     const newTiers = Array.from({ length: count }, () => ({
       id: uid(),
       name: newTierName.trim(),
-      amount: Number(newTierAmount) || 0,
-      amountForeign: newTierAmountForeign === "" ? null : Number(newTierAmountForeign) || 0,
+      amount: Number(resolvedAmount) || 0,
+      amountForeign: resolvedForeign == null ? null : (Number(resolvedForeign) || 0),
       rank: newTierRank || null,
     }));
     set((o) => ({ ...o, tiers: [...o.tiers, ...newTiers] }));
@@ -4867,7 +5083,40 @@ function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, delete
     setNewTierAmountForeign("");
     setNewTierCount("1");
   };
-  const removeTier = (id) => set((o) => ({ ...o, tiers: o.tiers.filter((t) => t.id !== id) }));
+  const removeTier = (id) => {
+    set((o) => ({ ...o, tiers: o.tiers.filter((t) => t.id !== id) }));
+    setSwipedTierId(null);
+    if (editingTierId === id) setEditingTierId(null);
+  };
+
+  const beginEditTier = (t) => {
+    setEditingTierId(t.id);
+    setEditDraft({
+      name: t.name,
+      amount: String(t.amount),
+      amountForeign: t.amountForeign == null ? "" : String(t.amountForeign),
+      rank: t.rank || "",
+    });
+    setSwipedTierId(null);
+  };
+  const cancelEditTier = () => { setEditingTierId(null); setEditDraft(null); };
+  const saveEditTier = () => {
+    if (!editingTierId || !editDraft) return;
+    const resolvedAmount = expandManShortcut(editDraft.amount);
+    const resolvedForeign = editDraft.amountForeign === "" ? null : expandManShortcut(editDraft.amountForeign);
+    set((o) => ({
+      ...o,
+      tiers: o.tiers.map((t) => t.id === editingTierId ? {
+        ...t,
+        name: editDraft.name.trim() || t.name,
+        amount: Number(resolvedAmount) || 0,
+        amountForeign: resolvedForeign == null ? null : (Number(resolvedForeign) || 0),
+        rank: editDraft.rank || null,
+      } : t),
+    }));
+    setEditingTierId(null);
+    setEditDraft(null);
+  };
 
   const rate = oripa.totalSlots ? ((oripa.tiers.length / Number(oripa.totalSlots)) * 100).toFixed(1) : null;
   const rankColor = { rainbow: C.gold, gold: "#D4A94A", silver: "#B8C0CC", bronze: "#B08D57" };
@@ -4875,31 +5124,78 @@ function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, delete
   const box = useMemo(() => computeBoxState(fullLog || [], oripa), [fullLog, oripa]);
   const remainingWinTotal = box.remainingPrizeAmount + box.lastOneRemainingValue;
 
+  // 収支計算: 売上(draws × 単価) - 支払(wins + hazure guarantee)
+  const pnl = useMemo(() => {
+    const log = fullLog || [];
+    let drawCount = 0, winTotal = 0;
+    log.forEach((e) => {
+      if (e.type === "draw") drawCount += 1;
+      else if (e.type === "win") winTotal += (Number(e.amount) || 0);
+    });
+    const revenue = drawCount * (Number(oripa.price) || 0);
+    // 最低保証はハズレ口数×金額
+    const hazureCount = Math.max(0, drawCount - log.filter((e) => e.type === "win" && !e.isLastOne).length);
+    const guarantee = oripa.minGuarantee && oripa.minGuarantee.enabled
+      ? (Number(oripa.minGuarantee.amount) || 0) * (oripa.minGuarantee.applyToAll ? drawCount : hazureCount)
+      : 0;
+    const payout = winTotal + guarantee;
+    return { revenue, payout, profit: revenue - payout, drawCount };
+  }, [fullLog, oripa.price, oripa.minGuarantee]);
+
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
       <button onClick={onToggle} className="press w-full flex items-center justify-between px-4 py-3">
-        <div className="text-left">
+        <div className="text-left" style={{ flex: 1 }}>
           <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15 }}>{oripa.name}</div>
           <div style={{ fontSize: 11, color: C.muted }}>
             {yen(oripa.price)} / 回 ・ {oripa.tiers.length}種のあたり{rate ? ` ・ ${rate}%` : ""}
           </div>
-          <div style={{ fontSize: 11, color: C.mint, marginTop: 2 }}>残りのあたり額合計 {yen(remainingWinTotal)}</div>
+          <div style={{ fontSize: 12, marginTop: 3, display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
+            <span style={{ color: C.muted, fontSize: 11 }}>店の現時点の収支</span>
+            <span style={{ fontFamily: FONT_MONO, fontWeight: 800, fontSize: 14, color: pnl.profit >= 0 ? C.mint : C.coral }}>
+              {pnl.profit >= 0 ? "+" : "−"}{yen(Math.abs(pnl.profit))}
+            </span>
+          </div>
+          {pnl.drawCount > 0 && (
+            <div style={{ fontSize: 11, marginTop: 2, display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ color: C.muted }}>売上 <span style={{ fontFamily: FONT_MONO, color: C.paper }}>{yen(pnl.revenue)}</span></span>
+              <span style={{ color: C.muted }}>支払 <span style={{ fontFamily: FONT_MONO, color: C.paper }}>{yen(pnl.payout)}</span></span>
+              <span style={{ color: C.muted }}>({pnl.drawCount}口消化)</span>
+            </div>
+          )}
         </div>
         <ChevronRight size={16} color={C.muted} style={{ transform: expanded ? "rotate(90deg)" : "none", transition: "transform .15s" }} />
       </button>
 
       {expanded && (
         <div className="px-4 pb-4 flex flex-col gap-4" style={{ borderTop: `1px solid ${C.line}` }}>
-          <div
-            className="rounded-lg px-3 py-2.5 flex items-center justify-between mt-4"
-            style={{ background: "rgba(111,207,143,0.12)", border: `1px solid ${C.mint}` }}
-          >
-            <span style={{ fontSize: 12, color: C.mint, display: "flex", alignItems: "center", gap: 6 }}>
-              <Sparkles size={13} />
-              残りのあたり額の合計({box.remainingTiers.length}種{box.lastOneAwarded ? "" : oripa.lastOne.enabled ? "+ラストワン" : ""})
-            </span>
-            <span style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 16, color: C.mint }}>{yen(remainingWinTotal)}</span>
-          </div>
+          {/* 店の収支(お客様の支払額 - 当たった景品額) */}
+          {(() => {
+            const profitColor = pnl.profit >= 0 ? C.mint : C.coral;
+            const profitBg = pnl.profit >= 0 ? "rgba(111,207,143,0.12)" : "rgba(226,105,79,0.12)";
+            return (
+              <div
+                className="rounded-lg px-3 py-3 flex flex-col gap-2 mt-4"
+                style={{ background: profitBg, border: `1px solid ${profitColor}` }}
+              >
+                <div className="flex items-center justify-between">
+                  <span style={{ fontSize: 12, color: profitColor, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
+                    💰 店の収支(現時点)
+                  </span>
+                  <span style={{ fontFamily: FONT_MONO, fontWeight: 800, fontSize: 20, color: profitColor }}>
+                    {pnl.profit >= 0 ? "+" : ""}{yen(pnl.profit)}
+                  </span>
+                </div>
+                <div style={{ fontSize: 10, color: C.muted, display: "flex", justifyContent: "space-between", fontFamily: FONT_MONO }}>
+                  <span>売上 {yen(pnl.revenue)}({pnl.drawCount}口)</span>
+                  <span>− 景品 {yen(pnl.payout)}</span>
+                </div>
+                <div style={{ fontSize: 9, color: C.muted, textAlign: "center" }}>
+                  残りのあたり額の合計 {yen(remainingWinTotal)}
+                </div>
+              </div>
+            );
+          })()}
           <div>
             <label style={labelStyle}>オリパ名</label>
             <input value={oripa.name} onChange={(e) => set((o) => ({ ...o, name: e.target.value }))} style={{ ...inputStyle, fontFamily: FONT_BODY }} />
@@ -4912,6 +5208,7 @@ function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, delete
             <label style={labelStyle}>総口数(箱全体の回数)</label>
             <input type="number" inputMode="numeric" value={oripa.totalSlots === 0 || oripa.totalSlots === "0" ? "" : oripa.totalSlots} onChange={(e) => set((o) => ({ ...o, totalSlots: e.target.value }))} style={inputStyle} placeholder="例: 100" />
           </div>
+
           <div>
             <label style={labelStyle}>目標還元率(%)</label>
             <input
@@ -4924,6 +5221,29 @@ function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, delete
             />
           </div>
 
+          {/* 外国人向け自動割引率 */}
+          <div>
+            <label style={labelStyle}>外国人向け自動割引(%)</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.5"
+                value={oripa.foreignPctOffset == null ? "-3" : oripa.foreignPctOffset}
+                onChange={(e) => set((o) => ({ ...o, foreignPctOffset: e.target.value === "" ? 0 : Number(e.target.value) }))}
+                style={{ ...inputStyle, flex: 1 }}
+                placeholder="-3"
+              />
+              <span style={{ fontSize: 11, color: C.muted, whiteSpace: "nowrap" }}>
+                %(例: -3 → 封入額の97%)
+              </span>
+            </div>
+            <div style={{ fontSize: 10, color: C.muted, marginTop: 4, lineHeight: 1.5 }}>
+              各あたりの「外国人価格」が空欄のとき、この%で自動計算されます。<br/>
+              個別に値を入れた場合はそちら優先。
+            </div>
+          </div>
+
           <DesignDashboard oripa={oripa} />
 
           <div className="flex flex-col gap-2">
@@ -4933,17 +5253,23 @@ function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, delete
             </div>
             <div className="flex gap-2">
               <input value={newTierName} onChange={(e) => setNewTierName(e.target.value)} placeholder="名前(例: A賞)" style={{ ...inputStyle, fontFamily: FONT_BODY, flex: 2 }} />
-              <input type="number" inputMode="numeric" value={newTierAmount} onChange={(e) => setNewTierAmount(e.target.value)} placeholder="金額" style={{ ...inputStyle, flex: 1 }} />
+              <input type="text" inputMode="decimal" value={newTierAmount} onChange={(e) => setNewTierAmount(e.target.value)} placeholder="7 → 70,000" style={{ ...inputStyle, flex: 1 }} />
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-center">
               <input
-                type="number"
-                inputMode="numeric"
+                type="text"
+                inputMode="decimal"
                 value={newTierAmountForeign}
                 onChange={(e) => setNewTierAmountForeign(e.target.value)}
-                placeholder="外国人価格(任意)"
+                placeholder="外国人価格(空欄で自動)"
                 style={{ ...inputStyle, flex: 1 }}
               />
+              <span style={{ fontSize: 10, color: C.muted, whiteSpace: "nowrap" }}>
+                {newTierAmount && !newTierAmountForeign ? `自動: ${yen(foreignPriceOf(oripa, { amount: expandManShortcut(newTierAmount), amountForeign: null }))}` : ""}
+              </span>
+            </div>
+            <div style={{ fontSize: 10, color: C.muted, marginTop: -2 }}>
+              💡 金額は「7」=70000円、「6.5」=65000円、「0.85」=8500円 のように万単位でも入力可
             </div>
             <div className="flex gap-2 items-center">
               <select value={newTierRank} onChange={(e) => setNewTierRank(e.target.value)} style={{ ...inputStyle, fontFamily: FONT_BODY, flex: 2 }}>
@@ -4998,78 +5324,168 @@ function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, delete
                     <span>あたり一覧({oripa.tiers.length}種)</span>
                     <span>{consumedCount > 0 ? `${consumedCount}種が当選済み` : "未当選"}</span>
                   </div>
+                  <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>
+                    💡 行を右に長押しorスワイプで削除ボタン表示 / 鉛筆マークで編集
+                  </div>
                   <div className="flex flex-col gap-2">
                     {oripa.tiers.map((t) => {
                       const win = winByTierId[t.id];
                       const isConsumed = !!win;
+                      const isEditing = editingTierId === t.id;
+                      const isSwiped = swipedTierId === t.id;
+                      const autoForeign = foreignPriceOf(oripa, t);
+
+                      if (isEditing) {
+                        // 編集フォーム
+                        return (
+                          <div
+                            key={t.id}
+                            className="flex flex-col gap-2 rounded-lg p-3"
+                            style={{ background: C.surfaceAlt2, border: `1px solid ${C.gold}` }}
+                          >
+                            <div className="flex gap-2">
+                              <input
+                                value={editDraft.name}
+                                onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })}
+                                placeholder="名前"
+                                style={{ ...inputStyle, fontFamily: FONT_BODY, flex: 2 }}
+                              />
+                              <input
+                                type="text" inputMode="decimal"
+                                value={editDraft.amount}
+                                onChange={(e) => setEditDraft({ ...editDraft, amount: e.target.value })}
+                                placeholder="金額"
+                                style={{ ...inputStyle, flex: 1 }}
+                              />
+                            </div>
+                            <div className="flex gap-2 items-center">
+                              <input
+                                type="text" inputMode="decimal"
+                                value={editDraft.amountForeign}
+                                onChange={(e) => setEditDraft({ ...editDraft, amountForeign: e.target.value })}
+                                placeholder="外国人価格(空欄で自動)"
+                                style={{ ...inputStyle, flex: 1 }}
+                              />
+                              <select
+                                value={editDraft.rank}
+                                onChange={(e) => setEditDraft({ ...editDraft, rank: e.target.value })}
+                                style={{ ...inputStyle, fontFamily: FONT_BODY, flex: 1 }}
+                              >
+                                <option value="">枠なし</option>
+                                <option value="rainbow">虹枠</option>
+                                <option value="gold">金枠</option>
+                                <option value="silver">銀枠</option>
+                                <option value="bronze">銅枠</option>
+                                <option value="other">その他</option>
+                              </select>
+                            </div>
+                            <div className="flex gap-2">
+                              <button onClick={cancelEditTier} className="press flex-1 rounded-lg py-2" style={{ border: `1px solid ${C.line}`, color: C.paper, fontSize: 12 }}>キャンセル</button>
+                              <button onClick={saveEditTier} className="press flex-1 rounded-lg py-2" style={{ background: C.gold, color: C.ink, fontSize: 12, fontWeight: 700 }}>保存</button>
+                            </div>
+                          </div>
+                        );
+                      }
+
                       return (
                         <div
                           key={t.id}
-                          className="flex items-center justify-between rounded-lg px-3 py-2"
-                          style={{
-                            background: isConsumed ? C.surfaceAlt2 : C.surfaceAlt,
-                            border: `1px solid ${isConsumed ? C.coral : C.line}`,
-                            opacity: isConsumed ? 0.65 : 1,
-                          }}
+                          style={{ position: "relative", overflow: "hidden", borderRadius: 8 }}
                         >
-                          <div className="flex items-center gap-2 min-w-0" style={{ flex: 1 }}>
-                            {t.rank && (
-                              <span
-                                style={{
-                                  fontSize: 10,
-                                  color: rankColor[t.rank],
-                                  border: `1px solid ${rankColor[t.rank]}`,
-                                  borderRadius: 999,
-                                  padding: "1px 6px",
-                                  flexShrink: 0,
-                                  opacity: isConsumed ? 0.7 : 1,
-                                }}
+                          {/* 削除ボタン(背後) */}
+                          {isSwiped && (
+                            <div style={{ position: "absolute", top: 0, right: 0, bottom: 0, display: "flex", alignItems: "center" }}>
+                              <button
+                                onClick={() => removeTier(t.id)}
+                                className="press"
+                                style={{ background: C.coral, color: "#fff", border: "none", padding: "0 20px", height: "100%", fontSize: 12, fontWeight: 700 }}
                               >
-                                {RANK_LABEL[t.rank]}
-                              </span>
-                            )}
-                            <div className="flex flex-col min-w-0">
-                              <span
-                                style={{
-                                  fontSize: 13,
-                                  textDecoration: isConsumed ? "line-through" : "none",
-                                  color: isConsumed ? C.muted : C.paper,
-                                  overflow: "hidden",
-                                  textOverflow: "ellipsis",
-                                  whiteSpace: "nowrap",
-                                }}
-                              >
-                                {t.name}
-                              </span>
-                              {isConsumed && (
-                                <span style={{ fontSize: 9, color: C.coral, fontFamily: FONT_MONO }}>
-                                  当選済 {fmtTime(win.ts)}
+                                削除
+                              </button>
+                            </div>
+                          )}
+                          <div
+                            onClick={() => { if (isSwiped) setSwipedTierId(null); }}
+                            onContextMenu={(e) => { e.preventDefault(); setSwipedTierId(isSwiped ? null : t.id); }}
+                            className="flex items-center justify-between px-3 py-2"
+                            style={{
+                              background: isConsumed ? C.surfaceAlt2 : C.surfaceAlt,
+                              border: `1px solid ${isConsumed ? C.coral : C.line}`,
+                              borderRadius: 8,
+                              opacity: isConsumed ? 0.65 : 1,
+                              transform: isSwiped ? "translateX(-80px)" : "translateX(0)",
+                              transition: "transform 0.2s",
+                              cursor: isSwiped ? "pointer" : "default",
+                            }}
+                          >
+                            <div className="flex items-center gap-2 min-w-0" style={{ flex: 1 }}>
+                              {t.rank && (
+                                <span
+                                  style={{
+                                    fontSize: 10,
+                                    color: rankColor[t.rank],
+                                    border: `1px solid ${rankColor[t.rank]}`,
+                                    borderRadius: 999,
+                                    padding: "1px 6px",
+                                    flexShrink: 0,
+                                    opacity: isConsumed ? 0.7 : 1,
+                                  }}
+                                >
+                                  {RANK_LABEL[t.rank]}
                                 </span>
                               )}
+                              <div className="flex flex-col min-w-0">
+                                <span
+                                  style={{
+                                    fontSize: 13,
+                                    textDecoration: isConsumed ? "line-through" : "none",
+                                    color: isConsumed ? C.muted : C.paper,
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  {t.name}
+                                </span>
+                                {isConsumed && (
+                                  <span style={{ fontSize: 9, color: C.coral, fontFamily: FONT_MONO }}>
+                                    当選済 {fmtTime(win.ts)}
+                                  </span>
+                                )}
+                              </div>
                             </div>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            <div className="flex flex-col items-end">
-                              <span
-                                style={{
-                                  fontFamily: FONT_MONO,
-                                  fontWeight: 700,
-                                  color: isConsumed ? C.muted : C.gold,
-                                  fontSize: 14,
-                                  textDecoration: isConsumed ? "line-through" : "none",
-                                }}
-                              >
-                                {yen(t.amount)}
-                              </span>
-                              {t.amountForeign != null && t.amountForeign !== "" && (
+                            <div className="flex items-center gap-2">
+                              <div className="flex flex-col items-end">
+                                <span
+                                  style={{
+                                    fontFamily: FONT_MONO,
+                                    fontWeight: 700,
+                                    color: isConsumed ? C.muted : C.gold,
+                                    fontSize: 14,
+                                    textDecoration: isConsumed ? "line-through" : "none",
+                                  }}
+                                >
+                                  {yen(t.amount)}
+                                </span>
                                 <span style={{ fontFamily: FONT_MONO, fontSize: 10, color: C.muted, textDecoration: isConsumed ? "line-through" : "none" }}>
-                                  外 {yen(t.amountForeign)}
+                                  外 {yen(autoForeign)}{t.amountForeign == null || t.amountForeign === "" ? "(自動)" : ""}
                                 </span>
-                              )}
+                              </div>
+                              <button
+                                onClick={() => beginEditTier(t)}
+                                className="press"
+                                style={{ padding: 6, borderRadius: 6, background: "transparent", border: `1px solid ${C.gold}`, color: C.gold, fontSize: 11, fontWeight: 700 }}
+                              >
+                                ✎
+                              </button>
+                              <button
+                                onClick={() => setSwipedTierId(isSwiped ? null : t.id)}
+                                style={{ color: C.muted, padding: 4 }}
+                                title="削除"
+                              >
+                                <Trash2 size={15} />
+                              </button>
                             </div>
-                            <button onClick={() => removeTier(t.id)}>
-                              <Trash2 size={15} color={C.muted} />
-                            </button>
                           </div>
                         </div>
                       );
@@ -7677,14 +8093,14 @@ function ConfirmedShiftCalendar({ confirmedShifts, staff, timePunches, attendanc
 // ============================================================
 // STAFF LOCK ZONE: shown after entering 001 - only punch + submit + view
 // ============================================================
-function StaffShiftZone({ staff, addStaff, shiftRequests, submitShiftRequest, confirmedShifts, timePunches, punch, storeGeo, onLock }) {
+function StaffShiftZone({ staff, addStaff, shiftRequests, submitShiftRequest, confirmedShifts, timePunches, punch, storeGeo, oripaList = [], logsById = {}, onLock }) {
   const [tab, setTab] = useState("clock");
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Users size={18} color={C.gold} />
-          <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17 }}>勤怠・シフト</span>
+          <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17 }}>スタッフメニュー</span>
           <span style={{ fontSize: 10, fontWeight: 700, color: C.ink, background: C.gold, borderRadius: 999, padding: "1px 8px" }}>スタッフ</span>
         </div>
         <button onClick={onLock} className="press flex items-center gap-1.5 rounded-full px-3 py-1.5" style={{ background: C.surfaceAlt2, color: C.muted, fontSize: 12 }}>
@@ -7693,17 +8109,18 @@ function StaffShiftZone({ staff, addStaff, shiftRequests, submitShiftRequest, co
         </button>
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex gap-2 overflow-x-auto pb-1" style={{ WebkitOverflowScrolling: "touch" }}>
         {[
-          ["clock", "打刻"],
-          ["submit", "希望提出"],
+          ["clock", "勤怠"],
+          ["submit", "シフト提出"],
           ["confirmed", "確定シフト"],
+          ["oripa", "オリパ一覧"],
         ].map(([k, l]) => (
           <button
             key={k}
             onClick={() => setTab(k)}
-            className="press flex-1 rounded-lg py-2"
-            style={{ background: tab === k ? C.gold : C.surfaceAlt, color: tab === k ? C.ink : C.muted, fontSize: 13, fontWeight: 700 }}
+            className="press rounded-lg py-2 px-3"
+            style={{ background: tab === k ? C.gold : C.surfaceAlt, color: tab === k ? C.ink : C.muted, fontSize: 12, fontWeight: 700, flexShrink: 0 }}
           >
             {l}
           </button>
@@ -7724,6 +8141,154 @@ function StaffShiftZone({ staff, addStaff, shiftRequests, submitShiftRequest, co
           adminUnlocked={false}
         />
       )}
+      {tab === "oripa" && <StaffOripaReadOnly oripaList={oripaList} logsById={logsById} />}
+    </div>
+  );
+}
+
+// ============================================================
+// STAFF READ-ONLY ORIPA LIST: shown in 001 zone's オリパ一覧 tab
+// Oripa settings cannot be changed. Shows only the prize list
+// for each oripa so staff can look up "how much is this card?"
+// Intentionally hides any 収支/profit/revenue information.
+// ============================================================
+function StaffOripaReadOnly({ oripaList, logsById }) {
+  const [expandedId, setExpandedId] = useState(null);
+  const [filter, setFilter] = useState("");
+
+  if (!oripaList || oripaList.length === 0) {
+    return (
+      <div className="rounded-xl px-4 py-8 text-center" style={{ background: C.surface, border: `1px dashed ${C.line}`, color: C.muted, fontSize: 13 }}>
+        オリパがまだ登録されていません
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="rounded-lg px-3 py-2.5" style={{ background: C.surfaceAlt2, border: `1px solid ${C.line}` }}>
+        <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>
+          お客様から「このカードいくらで入ってる?」と聞かれた時の確認用。あたりの中身だけを表示しています(編集・金額合計・収支は非表示)。
+        </div>
+        <input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="あたり名・オリパ名で検索(例: ピカチュウ)"
+          style={{ ...inputStyle, fontFamily: FONT_BODY, fontSize: 13 }}
+        />
+      </div>
+
+      {oripaList.map((o) => {
+        const log = logsById[o.id] || [];
+        // 既に出たあたりのtierIds(重複カウント対応)
+        const consumed = {};
+        log.forEach((e) => {
+          if (e.type === "win" && e.tierId) {
+            consumed[e.tierId] = (consumed[e.tierId] || 0) + 1;
+          }
+        });
+
+        // フィルタ: オリパ名 or あたり名に一致
+        const q = filter.trim().toLowerCase();
+        const matchesOripa = !q || o.name.toLowerCase().includes(q);
+        const matchingTiers = q ? o.tiers.filter((t) => (t.name || "").toLowerCase().includes(q)) : o.tiers;
+        if (q && !matchesOripa && matchingTiers.length === 0) return null;
+
+        const showTiers = q && !matchesOripa ? matchingTiers : o.tiers;
+        const isOpen = expandedId === o.id || (q && matchingTiers.length > 0 && !matchesOripa);
+
+        // Group by rank
+        const groups = {};
+        showTiers.forEach((t) => {
+          const key = RANK_GROUP_ORDER.includes(t.rank) ? t.rank : "other";
+          if (!groups[key]) groups[key] = [];
+          groups[key].push(t);
+        });
+
+        return (
+          <div key={o.id} className="rounded-xl overflow-hidden" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+            <button
+              onClick={() => setExpandedId(isOpen ? null : o.id)}
+              className="press w-full flex items-center justify-between px-4 py-3"
+            >
+              <div className="text-left" style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15 }}>{o.name}</div>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
+                  {yen(o.price)} / 回 ・ あたり {o.tiers.length}種
+                  {o.lastOne && o.lastOne.enabled ? ` ・ ラストワン有` : ""}
+                </div>
+              </div>
+              <ChevronRight size={16} color={C.muted} style={{ transform: isOpen ? "rotate(90deg)" : "none", transition: "transform .15s" }} />
+            </button>
+
+            {isOpen && (
+              <div className="px-4 pb-4 flex flex-col gap-3" style={{ borderTop: `1px solid ${C.line}` }}>
+                {showTiers.length === 0 ? (
+                  <div style={{ fontSize: 12, color: C.muted, padding: "10px 0" }}>あたりが登録されていません</div>
+                ) : (
+                  <>
+                    {RANK_GROUP_ORDER.filter((k) => groups[k] && groups[k].length > 0).map((k) => (
+                      <div key={k} className="flex flex-col gap-1.5 pt-2">
+                        <div className="flex items-center justify-between">
+                          <span style={{ fontSize: 11, fontWeight: 700, color: RANK_GROUP_COLOR[k] }}>{RANK_GROUP_LABEL[k]}</span>
+                          <span style={{ fontSize: 10, color: C.muted }}>{groups[k].length}個</span>
+                        </div>
+                        {groups[k].map((t) => {
+                          const taken = consumed[t.id] || 0;
+                          return (
+                            <div
+                              key={t.id}
+                              className="flex items-center justify-between rounded-lg px-3 py-2"
+                              style={{
+                                background: C.surfaceAlt,
+                                border: `1px solid ${RANK_GROUP_COLOR[k]}`,
+                                opacity: taken > 0 ? 0.55 : 1,
+                              }}
+                            >
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: 13, fontWeight: 700, color: C.paper, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  {t.name || "(名称未入力)"}
+                                </div>
+                                {taken > 0 && (
+                                  <div style={{ fontSize: 10, color: C.muted, marginTop: 1 }}>
+                                    排出済 ×{taken}
+                                  </div>
+                                )}
+                              </div>
+                              <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 10 }}>
+                                <div style={{ fontFamily: FONT_MONO, fontWeight: 700, color: RANK_GROUP_COLOR[k], fontSize: 14 }}>
+                                  {yen(t.amount)}
+                                </div>
+                                {t.amountForeign != null && t.amountForeign !== "" && (
+                                  <div style={{ fontFamily: FONT_MONO, fontSize: 10, color: C.muted, marginTop: 1 }}>
+                                    外国人: {yen(t.amountForeign)}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ))}
+                    {o.lastOne && o.lastOne.enabled && (!q || (o.lastOne.name || "").toLowerCase().includes(q)) && (
+                      <div className="flex flex-col gap-1.5 pt-2" style={{ borderTop: `1px dashed ${C.line}` }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: C.gold }}>🏆 ラストワン賞</span>
+                        <div
+                          className="flex items-center justify-between rounded-lg px-3 py-2"
+                          style={{ background: C.surfaceAlt, border: `1px solid ${C.gold}` }}
+                        >
+                          <div style={{ fontSize: 13, fontWeight: 700 }}>{o.lastOne.name || "ラストワン賞"}</div>
+                          <div style={{ fontFamily: FONT_MONO, fontWeight: 700, color: C.gold, fontSize: 14 }}>{yen(o.lastOne.amount)}</div>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
