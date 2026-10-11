@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>データ復旧ツール</title>
+<style>
+  body { font-family: -apple-system, "Hiragino Kaku Gothic ProN", sans-serif; max-width: 680px; margin: 0 auto; padding: 20px; background: #12151C; color: #E8E9ED; line-height: 1.6; }
+  h1 { font-size: 20px; margin: 10px 0 20px; color: #B8923E; }
+  h2 { font-size: 15px; margin: 20px 0 8px; color: #B8923E; border-bottom: 1px solid #333; padding-bottom: 4px; }
+  .box { background: #1B2029; border: 1px solid #333; border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+  .btn { background: #B8923E; color: #12151C; border: none; padding: 14px 20px; font-size: 15px; border-radius: 8px; cursor: pointer; width: 100%; margin: 10px 0; font-weight: 700; }
+  .btn:disabled { background: #555; color: #999; cursor: default; }
+  .btn.danger { background: #C85540; color: white; }
+  .btn.safe { background: #4A8C64; color: white; }
+  .log { background: #0d0f14; padding: 10px; border-radius: 6px; font-family: Menlo, monospace; font-size: 11px; white-space: pre-wrap; max-height: 300px; overflow: auto; color: #B8C0CC; }
+  .warn { color: #F4C165; }
+  .ok { color: #6FCF8F; }
+  .err { color: #E2694F; }
+  .muted { color: #7A8290; font-size: 12px; }
+  .kv { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px dashed #333; }
+  .kv:last-child { border-bottom: none; }
+  .kv .k { color: #B8C0CC; font-size: 12px; }
+  .kv .v { color: #E8E9ED; font-family: Menlo, monospace; font-size: 12px; }
+  details { background: #0d0f14; padding: 8px 12px; border-radius: 6px; margin: 6px 0; }
+  summary { cursor: pointer; font-size: 12px; color: #B8C0CC; }
+  pre { background: #0d0f14; padding: 8px; border-radius: 4px; font-size: 10px; overflow: auto; max-height: 240px; }
+</style>
+</head>
+<body>
+<h1>🛟 トレぴ データ復旧ツール</h1>
+<p class="muted">このツールはあなたの端末のローカル保存(localStorage)に残っているデータを Firestore に押し戻します。消えたオリパ・従業員・シフトを復元する最後の手段です。</p>
+
+<div class="box">
+  <h2>Step 1: この端末のローカルデータ</h2>
+  <div id="localInfo">読み込み中...</div>
+</div>
+
+<div class="box">
+  <h2>Step 2: Firestore(クラウド)の現状</h2>
+  <div id="remoteInfo">接続中...</div>
+</div>
+
+<div class="box">
+  <h2>Step 3: 復旧実行</h2>
+  <p class="muted">「ローカルにあって Firestore にないデータ」および「ローカルの方が件数が多いキー」を Firestore に書き戻します。既に Firestore にあるキーは上書きしません(安全)。</p>
+  <button class="btn safe" id="btnRestore" disabled>⬆︎ ローカルのデータを Firestore に復元する</button>
+  <button class="btn danger" id="btnForce" disabled>⚠ 強制的にローカルで完全上書きする(危険)</button>
+</div>
+
+<div class="box">
+  <h2>ログ</h2>
+  <div class="log" id="log">準備中...</div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
+<script>
+const logEl = document.getElementById('log');
+function log(msg, cls) {
+  const span = document.createElement('span');
+  if (cls) span.className = cls;
+  span.textContent = msg + '\n';
+  logEl.appendChild(span);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+const LS_KEY = 'oripa_app::__data';
+let localData = {};
+let remoteData = {};
+
+function readLocal() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch(e) { return {}; }
+}
+
+function summarize(data) {
+  const keys = Object.keys(data);
+  const result = { keys: keys.length, counts: {} };
+  for (const k of keys) {
+    const v = data[k];
+    try {
+      const parsed = typeof v === 'string' ? JSON.parse(v) : v;
+      if (Array.isArray(parsed)) result.counts[k] = parsed.length;
+      else if (typeof parsed === 'object' && parsed) result.counts[k] = Object.keys(parsed).length;
+      else result.counts[k] = 1;
+    } catch(e) {
+      result.counts[k] = '?';
+    }
+  }
+  return result;
+}
+
+function renderInfo(elId, data, label) {
+  const summary = summarize(data);
+  const el = document.getElementById(elId);
+  let html = `<div class="kv"><span class="k">合計キー数</span><span class="v">${summary.keys}</span></div>`;
+  const importantKeys = ['oripa:list', 'oripa:staff', 'oripa:shiftRequests', 'oripa:confirmedShifts', 'oripa:customers', 'oripa:sessions', 'oripa:timePunches', 'oripa:buyback', 'oripa:expenses', 'oripa:staffCompensation'];
+  for (const k of importantKeys) {
+    const c = summary.counts[k];
+    html += `<div class="kv"><span class="k">${k}</span><span class="v">${c !== undefined ? c + '件' : '(なし)'}</span></div>`;
+  }
+  // oripa:log:xxx counts
+  const logKeys = Object.keys(summary.counts).filter(k => k.startsWith('oripa:log:'));
+  if (logKeys.length) {
+    html += `<div class="kv"><span class="k">あたり履歴(oripa:log:*)</span><span class="v">${logKeys.length}個 / 合計${logKeys.reduce((a,k)=>a+(Number(summary.counts[k])||0),0)}件</span></div>`;
+  }
+  html += `<details><summary>全キー一覧(クリックで展開)</summary><pre>${Object.entries(summary.counts).map(([k,v])=>`${k}: ${v}`).join('\n')}</pre></details>`;
+  el.innerHTML = html;
+}
+
+async function init() {
+  log('ローカルデータ読み込み中...');
+  localData = readLocal();
+  const lSum = summarize(localData);
+  log('✓ ローカルキー数: ' + lSum.keys, 'ok');
+  renderInfo('localInfo', localData, 'ローカル');
+
+  if (lSum.keys === 0) {
+    log('⚠ この端末のローカルにはデータがありません。別の端末(オリパ・シフトが見えていた端末)でこのツールを開いてください。', 'warn');
+  }
+
+  log('Firebase接続中...');
+  try {
+    firebase.initializeApp({
+      apiKey: 'AIzaSyB8mS7AKtMAA_WWXjWGEnNgxrt2xOfXtbE',
+      authDomain: 'torepi-store.firebaseapp.com',
+      projectId: 'torepi-store',
+      storageBucket: 'torepi-store.firebasestorage.app',
+      messagingSenderId: '650220062622',
+      appId: '1:650220062622:web:c91b5b5021cc60514e788f',
+    });
+    await firebase.auth().signInAnonymously();
+    log('✓ Firebase認証OK', 'ok');
+    const db = firebase.firestore();
+    const snap = await db.collection('shared').doc('state').get();
+    remoteData = snap.exists ? (snap.data() || {}) : {};
+    const rSum = summarize(remoteData);
+    log('✓ Firestoreキー数: ' + rSum.keys, 'ok');
+    renderInfo('remoteInfo', remoteData, 'Firestore');
+
+    // Enable restore button if local has data that remote lacks or is bigger
+    const lKeys = Object.keys(localData);
+    let canRestore = false;
+    for (const k of lKeys) {
+      const lv = localData[k];
+      const rv = remoteData[k];
+      const lLen = Array.isArray(lv) ? lv.length : (typeof lv === 'string' ? (() => { try { const p = JSON.parse(lv); return Array.isArray(p) ? p.length : 1; } catch(e) { return 1; } })() : 1);
+      const rLen = Array.isArray(rv) ? rv.length : (typeof rv === 'string' ? (() => { try { const p = JSON.parse(rv); return Array.isArray(p) ? p.length : 1; } catch(e) { return 1; } })() : (rv ? 1 : 0));
+      if (!(k in remoteData) || lLen > rLen) { canRestore = true; break; }
+    }
+    if (canRestore) {
+      document.getElementById('btnRestore').disabled = false;
+      log('✓ 復元可能なデータが見つかりました。「復元する」ボタンを押してください。', 'ok');
+    } else {
+      log('ℹ Firestoreはすでにローカルと同等以上のデータを持っています。復元不要です。', 'warn');
+    }
+    document.getElementById('btnForce').disabled = false;
+  } catch (e) {
+    log('✗ Firebase接続失敗: ' + e.message, 'err');
+  }
+}
+
+document.getElementById('btnRestore').addEventListener('click', async () => {
+  const btn = document.getElementById('btnRestore');
+  btn.disabled = true;
+  btn.textContent = '復元中...';
+  try {
+    const db = firebase.firestore();
+    const patch = {};
+    let changed = 0;
+    for (const k of Object.keys(localData)) {
+      const lv = localData[k];
+      const rv = remoteData[k];
+      const lLen = Array.isArray(lv) ? lv.length : (typeof lv === 'string' ? (() => { try { const p = JSON.parse(lv); return Array.isArray(p) ? p.length : 1; } catch(e) { return 1; } })() : 1);
+      const rLen = Array.isArray(rv) ? rv.length : (typeof rv === 'string' ? (() => { try { const p = JSON.parse(rv); return Array.isArray(p) ? p.length : 1; } catch(e) { return 1; } })() : (rv ? 1 : 0));
+      if (!(k in remoteData) || lLen > rLen) {
+        patch[k] = lv;
+        changed++;
+        log('  ↑ ' + k + ' (local:' + lLen + ' > remote:' + rLen + ')', 'ok');
+      }
+    }
+    if (changed === 0) { log('変更なし。', 'warn'); btn.textContent = '復元不要'; return; }
+    await db.collection('shared').doc('state').set(patch, { merge: true });
+    log('\n✓ ' + changed + '件のキーを復元しました!', 'ok');
+    log('アプリ(https://keibakouhie-lgtm.github.io/ORIPA-DENTAKU/)を再読み込みして確認してください。', 'ok');
+    btn.textContent = '✓ 復元完了';
+  } catch (e) {
+    log('✗ 復元失敗: ' + e.message, 'err');
+    btn.disabled = false;
+    btn.textContent = '再試行';
+  }
+});
+
+document.getElementById('btnForce').addEventListener('click', async () => {
+  if (!confirm('【警告】\n\nFirestoreをローカルデータで完全上書きします。他の端末で入れた新しいデータが消える可能性があります。\n\n続行しますか?')) return;
+  const btn = document.getElementById('btnForce');
+  btn.disabled = true;
+  btn.textContent = '上書き中...';
+  try {
+    const db = firebase.firestore();
+    await db.collection('shared').doc('state').set(localData, { merge: false });
+    log('✓ Firestoreをローカルデータで完全上書きしました', 'ok');
+    btn.textContent = '✓ 上書き完了';
+  } catch (e) {
+    log('✗ 失敗: ' + e.message, 'err');
+    btn.disabled = false;
+    btn.textContent = '再試行';
+  }
+});
+
+init();
+</script>
+</body>
+</html>
