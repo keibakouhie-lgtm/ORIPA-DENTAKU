@@ -1598,24 +1598,7 @@ function OripaCalculator() {
         if (r && r.value) list = JSON.parse(r.value);
       } catch (e) {}
 
-      // one-time wipe: clear out all demo/seeded oripa so we start from a clean slate.
-      // this only runs once (guarded by the oripa:wipedV1 flag) so it never touches
-      // oripa created after this point.
-      let alreadyWiped = false;
-      try {
-        const r = await window.storage.get("oripa:wipedV1", true);
-        alreadyWiped = !!(r && r.value);
-      } catch (e) {}
-
-      if (!alreadyWiped) {
-        for (const o of list) {
-          window.storage.delete(`oripa:log:${o.id}`, true).catch(() => {});
-        }
-        list = [];
-        window.storage.set("oripa:list", JSON.stringify(list), true).catch(() => {});
-        window.storage.set("oripa:wipedV1", "true", true).catch(() => {});
-      }
-
+      // (危険だったワンタイム・ワイプ処理は撤去済み。絶対にリストを空で上書きしない。)
       setOripaList(list);
       try {
         const r = await window.storage.get("oripa:sessionStarts", true);
@@ -1691,40 +1674,76 @@ function OripaCalculator() {
 
   // Listen for remote updates from other devices (Firebase sync) and refresh state
   useEffect(() => {
+    // SAFETY: 他端末が致命的に空のデータをFirestoreに送ってきても、
+    // こちらが実データを持っていればローカルを上書きせず、逆にローカルを押し戻す。
+    const PROTECTED = {
+      "oripa:list":              () => oripaList,
+      "oripa:customers":         () => customers,
+      "oripa:staff":             () => staff,
+      "oripa:shiftRequests":     () => shiftRequests,
+      "oripa:confirmedShifts":   () => confirmedShifts,
+      "oripa:staffCompensation": () => staffCompensation,
+      "oripa:buyback":           () => buybackItems,
+    };
+    const isEmptyValue = (parsed) => {
+      if (parsed == null) return true;
+      if (Array.isArray(parsed)) return parsed.length === 0;
+      if (typeof parsed === "object") return Object.keys(parsed).length === 0;
+      return false;
+    };
+    const localHasData = (currentLocal) => {
+      if (currentLocal == null) return false;
+      if (Array.isArray(currentLocal)) return currentLocal.length > 0;
+      if (typeof currentLocal === "object") return Object.keys(currentLocal).length > 0;
+      return !!currentLocal;
+    };
+
     const handler = async (ev) => {
       const key = ev.detail && ev.detail.key;
       if (!key) return;
       try {
         const r = await window.storage.get(key, true);
         const v = r && r.value;
-        if (key === "oripa:list") setOripaList(v ? JSON.parse(v) : []);
-        else if (key === "oripa:customers") setCustomers(v ? JSON.parse(v) : []);
-        else if (key === "oripa:sessions") setSessions(v ? JSON.parse(v) : []);
-        else if (key === "oripa:sessionStarts") setSessionStartTotals(v ? JSON.parse(v) : {});
-        else if (key === "oripa:settlements") setSettlements(v ? JSON.parse(v) : []);
-        else if (key === "oripa:staff") setStaff(v ? JSON.parse(v) : []);
-        else if (key === "oripa:shiftRequests") setShiftRequests(v ? JSON.parse(v) : []);
-        else if (key === "oripa:confirmedShifts") setConfirmedShifts(v ? JSON.parse(v) : []);
-        else if (key === "oripa:timePunches") setTimePunches(v ? JSON.parse(v) : []);
-        else if (key === "oripa:storeGeo") setStoreGeo(v ? JSON.parse(v) : null);
-        else if (key === "oripa:buyback") setBuybackItems(v ? JSON.parse(v) : []);
-        else if (key === "oripa:expenses") setExpenses(v ? JSON.parse(v) : []);
-        else if (key === "oripa:staffCompensation") setStaffCompensation(v ? JSON.parse(v) : {});
-        else if (key === "oripa:buybackDaily") setBuybackDaily(v ? JSON.parse(v) : {});
-        else if (key === "oripa:attendanceApprovals") setAttendanceApprovals(v ? JSON.parse(v) : {});
-        else if (key === "oripa:dailyPayrollFinalized") setDailyPayrollFinalized(v ? JSON.parse(v) : {});
-        else if (key === "oripa:inventory") setInventory(v ? JSON.parse(v) : []);
-        else if (key === "oripa:lastSettledAt") setLastSettledAt(v ? JSON.parse(v) : 0);
+        const parsed = v ? JSON.parse(v) : null;
+
+        // 【保護】: 重要キーがリモート側で空になった時、ローカルがまだ持っていれば
+        // 絶対に反映せず、逆にローカルの実データをFirestoreに書き戻してリモートの事故を修復する。
+        if (key in PROTECTED && isEmptyValue(parsed)) {
+          const current = PROTECTED[key]();
+          if (localHasData(current)) {
+            console.warn("[SAFETY] Rejecting empty remote value for " + key + " — pushing local back to Firestore");
+            window.storage.set(key, JSON.stringify(current), true).catch(() => {});
+            return; // do not overwrite local state
+          }
+        }
+
+        if (key === "oripa:list") setOripaList(parsed || []);
+        else if (key === "oripa:customers") setCustomers(parsed || []);
+        else if (key === "oripa:sessions") setSessions(parsed || []);
+        else if (key === "oripa:sessionStarts") setSessionStartTotals(parsed || {});
+        else if (key === "oripa:settlements") setSettlements(parsed || []);
+        else if (key === "oripa:staff") setStaff(parsed || []);
+        else if (key === "oripa:shiftRequests") setShiftRequests(parsed || []);
+        else if (key === "oripa:confirmedShifts") setConfirmedShifts(parsed || []);
+        else if (key === "oripa:timePunches") setTimePunches(parsed || []);
+        else if (key === "oripa:storeGeo") setStoreGeo(parsed || null);
+        else if (key === "oripa:buyback") setBuybackItems(parsed || []);
+        else if (key === "oripa:expenses") setExpenses(parsed || []);
+        else if (key === "oripa:staffCompensation") setStaffCompensation(parsed || {});
+        else if (key === "oripa:buybackDaily") setBuybackDaily(parsed || {});
+        else if (key === "oripa:attendanceApprovals") setAttendanceApprovals(parsed || {});
+        else if (key === "oripa:dailyPayrollFinalized") setDailyPayrollFinalized(parsed || {});
+        else if (key === "oripa:inventory") setInventory(parsed || []);
+        else if (key === "oripa:lastSettledAt") setLastSettledAt(parsed || 0);
         else if (key.startsWith("oripa:log:")) {
           const id = key.slice("oripa:log:".length);
-          const parsed = v ? JSON.parse(v) : [];
-          setLogsById((prev) => ({ ...prev, [id]: parsed }));
+          setLogsById((prev) => ({ ...prev, [id]: parsed || [] }));
         }
       } catch (e) { console.warn("remote sync error:", e); }
     };
     window.addEventListener("storage-remote-update", handler);
     return () => window.removeEventListener("storage-remote-update", handler);
-  }, []);
+  }, [oripaList, customers, staff, shiftRequests, confirmedShifts, staffCompensation, buybackItems]);
 
   const fetchLog = useCallback(async (id) => {
     try {
@@ -1774,8 +1793,24 @@ function OripaCalculator() {
     }
   }, [navTab, activeOripaId, storeUnlocked, storeSubTab, oripaList, ensureLogLoaded]);
 
+  // ----- DATA SAFETY LAYER -----
+  // 重要キー:これらが空の値でFirestoreから降ってきても、ローカルに実データがあれば
+  // 絶対に受け入れず、逆にローカル→Firestoreへ押し戻す(self-healing)。
+  // また、保存のたびにタイムスタンプ付きバックアップをlocalStorageに10世代残す。
+  const writeTimestampedBackup = (key, value) => {
+    try {
+      const histKey = `oripa_backup::${key}`;
+      const raw = window.localStorage.getItem(histKey);
+      let hist = raw ? JSON.parse(raw) : [];
+      hist.push({ ts: Date.now(), value });
+      if (hist.length > 10) hist = hist.slice(hist.length - 10);
+      window.localStorage.setItem(histKey, JSON.stringify(hist));
+    } catch (e) {}
+  };
+
   const saveOripaList = (list) => {
     setOripaList(list);
+    writeTimestampedBackup("oripa:list", list);
     window.storage.set("oripa:list", JSON.stringify(list), true).catch(() => {});
   };
   const saveSessionStarts = (obj) => {
