@@ -1382,6 +1382,7 @@ function configuredRateRows(oripa) {
   const rows = groupTiers(oripa.tiers).map((g) => ({
     ...g,
     countLabel: totalSlots ? `${g.count}/${totalSlots}` : `${g.count}口`,
+    // ids は RateTable で金額一括編集するために使う
   }));
   if (oripa.lastOne.enabled) {
     rows.push({
@@ -1390,6 +1391,7 @@ function configuredRateRows(oripa) {
       count: 1,
       countLabel: totalSlots ? `1/${totalSlots}` : "1口",
       special: "lastone",
+      ids: [],
     });
   }
   const hazureCount = Math.max(0, totalSlots - oripa.tiers.length);
@@ -1399,6 +1401,7 @@ function configuredRateRows(oripa) {
     count: hazureCount,
     countLabel: totalSlots ? `${hazureCount}/${totalSlots}` : `${hazureCount}口`,
     special: "hazure",
+    ids: [],
   });
   return rows;
 }
@@ -1491,47 +1494,114 @@ function Toggle({ checked, onChange }) {
   );
 }
 
-function RateTable({ rows }) {
+function RateTable({ rows, onEditAmount = null }) {
+  // onEditAmount(row, newAmount) で金額一括更新。
+  // 未指定なら従来の読み取り専用表示。
+  const [editingKey, setEditingKey] = useState(null);
+  const [draft, setDraft] = useState("");
+
+  const beginEdit = (r, i) => {
+    const key = r.special || `${r.name}__${r.amount}__${i}`;
+    setEditingKey(key);
+    setDraft(String(r.amount || ""));
+  };
+  const cancelEdit = () => { setEditingKey(null); setDraft(""); };
+  const saveEdit = (r) => {
+    if (!onEditAmount) return cancelEdit();
+    const expanded = expandManShortcut(draft);
+    const nextAmount = Number(expanded) || 0;
+    onEditAmount(r, nextAmount);
+    cancelEdit();
+  };
+
   return (
     <div className="flex flex-col gap-1.5">
       <div className="grid gap-2 px-1" style={{ gridTemplateColumns: "1.6fr 0.9fr 1fr", fontSize: 10, color: C.muted }}>
         <span>名前</span>
         <span className="text-right">封入率</span>
-        <span className="text-right">金額</span>
+        <span className="text-right">金額{onEditAmount ? "(タップで編集)" : ""}</span>
       </div>
-      {rows.map((r, i) => (
-        <div
-          key={i}
-          className="grid items-center gap-2 rounded-lg px-3 py-2"
-          style={{ gridTemplateColumns: "1.6fr 0.9fr 1fr", background: C.surfaceAlt, border: `1px solid ${C.line}` }}
-        >
-          <div className="flex items-center gap-1.5 min-w-0">
-            {r.special === "lastone" && <Crown size={12} color={C.gold} />}
-            {r.special === "hazure" && <ShieldCheck size={12} color={C.muted} />}
-            <span
-              style={{
-                fontSize: 12,
-                color: r.special === "hazure" ? C.muted : C.paper,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {r.name}
-              {r.count > 1 ? ` ×${r.count}` : ""}
-            </span>
-          </div>
-          <span className="text-right" style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.paper }}>
-            {r.countLabel}
-          </span>
-          <span
-            className="text-right"
-            style={{ fontFamily: FONT_MONO, fontSize: 12, fontWeight: 700, color: r.special === "hazure" ? C.muted : C.gold }}
+      {rows.map((r, i) => {
+        const key = r.special || `${r.name}__${r.amount}__${i}`;
+        const isEditing = editingKey === key;
+        const canEdit = !!onEditAmount && !(r.special === "hazure" && !r.amount); // hazure amount 0 = guarantee未設定なので編集不可
+        return (
+          <div
+            key={i}
+            className="grid items-center gap-2 rounded-lg px-3 py-2"
+            style={{ gridTemplateColumns: "1.6fr 0.9fr 1fr", background: C.surfaceAlt, border: `1px solid ${isEditing ? C.gold : C.line}` }}
           >
-            {yen(r.amount)}
-          </span>
-        </div>
-      ))}
+            <div className="flex items-center gap-1.5 min-w-0">
+              {r.special === "lastone" && <Crown size={12} color={C.gold} />}
+              {r.special === "hazure" && <ShieldCheck size={12} color={C.muted} />}
+              <span
+                style={{
+                  fontSize: 12,
+                  color: r.special === "hazure" ? C.muted : C.paper,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {r.name}
+                {r.count > 1 ? ` ×${r.count}` : ""}
+              </span>
+            </div>
+            <span className="text-right" style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.paper }}>
+              {r.countLabel}
+            </span>
+            {isEditing ? (
+              <div className="flex items-center gap-1">
+                <input
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onBlur={() => saveEdit(r)}
+                  onKeyDown={(e) => { if (e.key === "Enter") saveEdit(r); if (e.key === "Escape") cancelEdit(); }}
+                  type="text"
+                  inputMode="decimal"
+                  autoFocus
+                  style={{
+                    background: C.surfaceAlt2,
+                    border: `1px solid ${C.gold}`,
+                    color: C.gold,
+                    borderRadius: 6,
+                    padding: "4px 6px",
+                    width: "100%",
+                    fontFamily: FONT_MONO,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    textAlign: "right",
+                    minWidth: 0,
+                  }}
+                  placeholder="7 → 70000"
+                />
+              </div>
+            ) : (
+              <button
+                onClick={() => canEdit && beginEdit(r, i)}
+                disabled={!canEdit}
+                className={canEdit ? "press" : ""}
+                style={{
+                  textAlign: "right",
+                  fontFamily: FONT_MONO,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: r.special === "hazure" ? C.muted : C.gold,
+                  background: "transparent",
+                  border: "none",
+                  cursor: canEdit ? "pointer" : "default",
+                  textDecoration: canEdit ? "underline dotted" : "none",
+                  textUnderlineOffset: 3,
+                  padding: 0,
+                  width: "100%",
+                }}
+              >
+                {yen(r.amount)}
+              </button>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -3064,12 +3134,35 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, staff = [],
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [oripaId, setOripaId] = useState("");
   const [isForeign, setIsForeign] = useState(false);
-  const [showDetails, setShowDetails] = useState(false);
-  const [hiddenRevealed, setHiddenRevealed] = useState(false);
-  const [hiddenTapCount, setHiddenTapCount] = useState(0);
+  // 全お客さんに常に詳細表示する運用に変更したため showDetails/hidden toggle は廃止
   const [staffId, setStaffId] = useState("");
   const [showEndedNames, setShowEndedNames] = useState(false);
   const [showEndedList, setShowEndedList] = useState(false);
+  // 終了済みお客様の個別クリア用。Firestore に同期して他端末でも反映。
+  const [hiddenEndedIds, setHiddenEndedIds] = useState([]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await window.storage.get("oripa:hiddenEndedIds", true);
+        if (r && r.value) setHiddenEndedIds(JSON.parse(r.value));
+      } catch (e) {}
+    })();
+    const handler = async (ev) => {
+      if (ev.detail && ev.detail.key === "oripa:hiddenEndedIds") {
+        try {
+          const r = await window.storage.get("oripa:hiddenEndedIds", true);
+          setHiddenEndedIds(r && r.value ? JSON.parse(r.value) : []);
+        } catch (e) {}
+      }
+    };
+    window.addEventListener("storage-remote-update", handler);
+    return () => window.removeEventListener("storage-remote-update", handler);
+  }, []);
+  const hideEndedSession = (sessionId) => {
+    const next = Array.from(new Set([...hiddenEndedIds, sessionId]));
+    setHiddenEndedIds(next);
+    window.storage.set("oripa:hiddenEndedIds", JSON.stringify(next), true).catch(() => {});
+  };
   // 最後に選んだスタッフを復元
   useEffect(() => {
     (async () => {
@@ -3082,25 +3175,15 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, staff = [],
       } catch (e) {}
     })();
   }, [staff.length]);
-  const tapHidden = () => {
-    if (hiddenRevealed) return;
-    const next = hiddenTapCount + 1;
-    if (next >= 5) {
-      setHiddenRevealed(true);
-      setHiddenTapCount(0);
-    } else {
-      setHiddenTapCount(next);
-    }
-  };
-
   useEffect(() => {
     if (!oripaId && oripaList.length) setOripaId(oripaList[0].id);
   }, [oripaList, oripaId]);
 
   // Exclude sessions that started before the last settlement/clear (hidden from Active view, but kept in history)
   const activeSessions = sessions.filter((s) => !s.endTs && s.startTs >= (lastSettledAt || 0)).sort((a, b) => b.startTs - a.startTs);
+  const hiddenEndedSet = new Set(hiddenEndedIds || []);
   const endedToday = sessions
-    .filter((s) => s.endTs && dateKeyOf(s.endTs) === todayKey() && s.endTs >= (lastSettledAt || 0))
+    .filter((s) => s.endTs && dateKeyOf(s.endTs) === todayKey() && s.endTs >= (lastSettledAt || 0) && !hiddenEndedSet.has(s.id))
     .sort((a, b) => b.endTs - a.endTs);
 
   const clearActive = () => {
@@ -3110,6 +3193,9 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, staff = [],
     try { window.storage.set("oripa:lastSettledAt", JSON.stringify(now), true); } catch (e) {}
     // dispatch an event the top-level listener will catch and update the lastSettledAt state
     try { window.dispatchEvent(new CustomEvent("storage-remote-update", { detail: { key: "oripa:lastSettledAt" } })); } catch (e) {}
+    // 個別クリア履歴もリセット
+    setHiddenEndedIds([]);
+    try { window.storage.set("oripa:hiddenEndedIds", JSON.stringify([]), true); } catch (e) {}
   };
 
   const nameSuggestions =
@@ -3122,12 +3208,9 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, staff = [],
 
   const submit = () => {
     if (!name.trim() || !oripaId) return;
-    startSession(name, oripaId, isForeign, showDetails, staffId || null);
+    startSession(name, oripaId, isForeign, true, staffId || null);
     setName("");
     setIsForeign(false);
-    setShowDetails(false);
-    setHiddenRevealed(false);
-    setHiddenTapCount(0);
     setShowSuggestions(false);
     setFormOpen(false);
   };
@@ -3137,10 +3220,6 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, staff = [],
       {!formOpen ? (
         <button
           onClick={() => {
-            // reset per-customer state so hidden panel starts closed every time
-            setShowDetails(false);
-            setHiddenRevealed(false);
-            setHiddenTapCount(0);
             setIsForeign(false);
             setFormOpen(true);
           }}
@@ -3249,42 +3328,11 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, staff = [],
             )}
           </div>
 
-          {/* hidden staff-only toggle: tap the tiny dot to unlock */}
-          {hiddenRevealed ? (
-            <div
-              className="rounded-lg px-3 py-2.5 flex items-center justify-between"
-              style={{ background: C.surfaceAlt2, border: `1px dashed ${C.gold}` }}
-            >
-              <div className="flex flex-col">
-                <span style={{ fontSize: 12, fontWeight: 700, color: C.gold }}>詳細情報を表示</span>
-                <span style={{ fontSize: 10, color: C.muted }}>当選確率・封入額など(店舗側のみ)</span>
-              </div>
-              <Toggle checked={showDetails} onChange={setShowDetails} />
-            </div>
-          ) : (
-            <button
-              onClick={tapHidden}
-              className="press"
-              style={{
-                alignSelf: "flex-end",
-                width: 16,
-                height: 16,
-                borderRadius: 999,
-                background: hiddenTapCount > 0 ? C.gold : C.surfaceAlt2,
-                opacity: hiddenTapCount > 0 ? 0.6 : 0.3,
-                border: "none",
-              }}
-              aria-label="staff"
-            />
-          )}
           <div className="flex gap-2">
             <button
               onClick={() => {
                 setFormOpen(false);
                 setIsForeign(false);
-                setShowDetails(false);
-                setHiddenRevealed(false);
-                setHiddenTapCount(0);
               }}
               className="press flex-1 py-2 rounded-lg"
               style={{ border: `1px solid ${C.line}`, color: C.paper, fontSize: 13 }}
@@ -3353,7 +3401,7 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, staff = [],
                 className="press rounded-md px-2.5 py-1"
                 style={{ border: `1px solid ${C.coral}`, color: C.coral, fontSize: 10, fontWeight: 700 }}
               >
-                クリア
+                全てクリア
               </button>
             </div>
           </div>
@@ -3387,13 +3435,21 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, staff = [],
                     ) : null;
                   })()}
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
                   <span style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 13, color: dColor }}>
                     {totals.diff >= 0 ? "+" : ""}
                     {yen(totals.diff)}
                   </span>
                   <button onClick={() => reopenSession(s.id)} className="press rounded-lg px-2 py-1" style={{ border: `1px solid ${C.line}`, color: C.muted, fontSize: 10 }}>
                     再開
+                  </button>
+                  <button
+                    onClick={() => hideEndedSession(s.id)}
+                    className="press rounded-lg px-2 py-1"
+                    style={{ border: `1px solid ${C.coral}`, color: C.coral, fontSize: 10, fontWeight: 700 }}
+                    aria-label="このお客様を一覧から消す"
+                  >
+                    クリア
                   </button>
                 </div>
               </div>
@@ -3441,17 +3497,41 @@ function RankGroupedPicker({ tiers, onPick, isForeign = false, consumedIds = nul
                   key={t.id}
                   onClick={() => { if (!isTaken) onPick(t); }}
                   disabled={isTaken}
-                  className="press flex flex-col items-start rounded-lg px-3 py-2"
+                  className={isTaken ? "" : "press"}
                   style={{
-                    background: C.surfaceAlt,
-                    border: `1px solid ${RANK_GROUP_COLOR[k]}`,
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "flex-start",
+                    borderRadius: 8,
+                    padding: "8px 12px",
+                    position: "relative",
+                    background: isTaken ? "transparent" : C.surfaceAlt,
+                    border: `1px solid ${isTaken ? "#3a3f48" : RANK_GROUP_COLOR[k]}`,
                     cursor: isTaken ? "default" : "pointer",
+                    opacity: isTaken ? 0.35 : 1,
+                    filter: isTaken ? "grayscale(1)" : "none",
+                    overflow: "hidden",
                   }}
                 >
-                  <span style={{ fontSize: 11, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%" }}>
+                  {isTaken && (
+                    <span
+                      style={{
+                        position: "absolute",
+                        top: 3,
+                        right: 6,
+                        fontSize: 9,
+                        fontWeight: 700,
+                        color: C.muted,
+                        letterSpacing: 0.5,
+                      }}
+                    >
+                      排出済
+                    </span>
+                  )}
+                  <span style={{ fontSize: 11, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%", textDecoration: isTaken ? "line-through" : "none" }}>
                     {t.name}
                   </span>
-                  <span style={{ fontFamily: FONT_MONO, fontWeight: 700, color: RANK_GROUP_COLOR[k], fontSize: 13 }}>{yen(priceOf(t))}</span>
+                  <span style={{ fontFamily: FONT_MONO, fontWeight: 700, color: isTaken ? C.muted : RANK_GROUP_COLOR[k], fontSize: 13, textDecoration: isTaken ? "line-through" : "none" }}>{yen(priceOf(t))}</span>
                 </button>
               );
             })}
@@ -3593,7 +3673,7 @@ function SessionCard({ session, oripa, fullLog, staff = [], onDraw, onWin, onHaz
         )}
       </div>
 
-      {Number(oripa.totalSlots) > 0 && !!session.showDetails && (
+      {Number(oripa.totalSlots) > 0 && (
         <div className="rounded-lg px-3 py-2 flex flex-col gap-1.5" style={{ background: C.surfaceAlt2, border: `1px solid ${C.line}` }}>
           <div className="flex items-center justify-between">
             <span style={{ fontSize: 11, color: C.muted }}>全体の当選確率</span>
@@ -3675,37 +3755,24 @@ function SessionCard({ session, oripa, fullLog, staff = [], onDraw, onWin, onHaz
       </div>
 
       {showWinPicker && (() => {
-        // Shared across all sessions on this oripa: any tier won by anyone is "taken".
-        // staff mode (showDetails on): taken tiers vanish from picker
-        // customer mode (showDetails off): taken tiers stay visible but can't be tapped
+        // 全員にあたり情報を見せる: 当たったあたりは消えずにグレーアウトで残す
         const oripaWonTierIds = new Set(fullLog.filter((e) => e.type === "win" && e.tierId).map((e) => e.tierId));
         const tiersToShow = oripa.tiers;
-        if (tiersToShow.length === 0 || (session.showDetails && oripaWonTierIds.size >= tiersToShow.length)) {
-          return <div style={{ fontSize: 12, color: C.muted, textAlign: "center" }}>残りのあたりはありません</div>;
+        if (tiersToShow.length === 0) {
+          return <div style={{ fontSize: 12, color: C.muted, textAlign: "center" }}>あたりが登録されていません</div>;
         }
         return (
-          <>
-            {!session.showDetails && (
-              <div style={{ fontSize: 10, color: C.muted, textAlign: "center", marginBottom: -4 }}>
-                獲得したい景品を選んでください
-              </div>
-            )}
-            <RankGroupedPicker
-              tiers={tiersToShow}
-              isForeign={isForeign}
-              consumedIds={oripaWonTierIds}
-              hideWhenTaken={session.showDetails}
-              oripa={oripa}
-              onPick={(t) => {
-                if (oripaWonTierIds.has(t.id)) {
-                  // already won by someone - ignore
-                  return;
-                }
-                onWin(t);
-                if (session.showDetails) setShowWinPicker(false);
-              }}
-            />
-          </>
+          <RankGroupedPicker
+            tiers={tiersToShow}
+            isForeign={isForeign}
+            consumedIds={oripaWonTierIds}
+            hideWhenTaken={false}
+            oripa={oripa}
+            onPick={(t) => {
+              if (oripaWonTierIds.has(t.id)) return; // 既に出た当たりは選べない
+              onWin(t);
+            }}
+          />
         );
       })()}
 
@@ -5644,7 +5711,24 @@ function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, delete
               <PercentCircle size={12} />
               <span>封入率表(箱全体)</span>
             </div>
-            {Number(oripa.totalSlots) ? <RateTable rows={configuredRateRows(oripa)} /> : <div style={{ fontSize: 12, color: C.muted }}>総口数を設定すると表示されます</div>}
+            {Number(oripa.totalSlots) ? (
+              <RateTable
+                rows={configuredRateRows(oripa)}
+                onEditAmount={(row, nextAmount) => {
+                  if (row.special === "lastone") {
+                    set((o) => ({ ...o, lastOne: { ...o.lastOne, amount: nextAmount } }));
+                  } else if (row.special === "hazure") {
+                    set((o) => ({ ...o, minGuarantee: { ...o.minGuarantee, amount: nextAmount } }));
+                  } else if (Array.isArray(row.ids) && row.ids.length > 0) {
+                    const idSet = new Set(row.ids);
+                    set((o) => ({
+                      ...o,
+                      tiers: o.tiers.map((t) => idSet.has(t.id) ? { ...t, amount: nextAmount } : t),
+                    }));
+                  }
+                }}
+              />
+            ) : <div style={{ fontSize: 12, color: C.muted }}>総口数を設定すると表示されます</div>}
           </div>
 
           <div className="flex flex-col gap-2 pt-2" style={{ borderTop: `1px dashed ${C.line}` }}>
