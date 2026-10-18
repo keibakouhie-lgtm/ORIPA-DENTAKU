@@ -1956,6 +1956,31 @@ function OripaCalculator() {
     setLogsById((prev) => ({ ...prev, [o.id]: [] }));
     window.storage.set(`oripa:log:${o.id}`, JSON.stringify([]), true).catch(() => {});
   };
+  const duplicateOripa = (id) => {
+    if (oripaList.length >= MAX_ORIPA) return;
+    const src = oripaList.find((o) => o.id === id);
+    if (!src) return;
+    // ティア(あたり)はIDを振り直して衝突を防ぐ
+    const dupTiers = (src.tiers || []).map((t) => ({ ...t, id: uid() }));
+    // 必須オブジェクトは必ず存在する形で安全に複製(src側が旧データで欠けていてもクラッシュしない)
+    const srcLastOne = (src.lastOne && typeof src.lastOne === "object")
+      ? src.lastOne
+      : { enabled: false, name: "ラストワン賞", amount: 0 };
+    const srcMinGuarantee = (src.minGuarantee && typeof src.minGuarantee === "object")
+      ? src.minGuarantee
+      : { enabled: false, amount: 0, applyToAll: false, targetRate: 0 };
+    const copy = {
+      ...src,
+      id: uid(),
+      name: `${src.name || "オリパ"}(2回転目)`,
+      tiers: dupTiers,
+      lastOne: { ...srcLastOne },
+      minGuarantee: { ...srcMinGuarantee },
+    };
+    saveOripaList([...oripaList, copy]);
+    setLogsById((prev) => ({ ...prev, [copy.id]: [] }));
+    window.storage.set(`oripa:log:${copy.id}`, JSON.stringify([]), true).catch(() => {});
+  };
   const updateOripa = (id, updater) => {
     saveOripaList(oripaList.map((o) => (o.id === id ? updater(o) : o)));
   };
@@ -2345,6 +2370,7 @@ function OripaCalculator() {
               addOripa={addOripa}
               updateOripa={updateOripa}
               deleteOripa={deleteOripa}
+              duplicateOripa={duplicateOripa}
               clearLog={clearLog}
               customers={customers}
               sessions={sessions}
@@ -2892,6 +2918,7 @@ function StoreShell({
   addOripa,
   updateOripa,
   deleteOripa,
+  duplicateOripa,
   clearLog,
   customers,
   sessions,
@@ -3028,7 +3055,7 @@ function StoreShell({
 
       {storeSubTab === "aggregate" && <StoreAggregate oripaList={oripaList} logsById={logsById} />}
       {storeSubTab === "manage" && (
-        <StoreManage oripaList={oripaList} logsById={logsById} addOripa={addOripa} updateOripa={updateOripa} deleteOripa={deleteOripa} clearLog={clearLog} />
+        <StoreManage oripaList={oripaList} logsById={logsById} addOripa={addOripa} updateOripa={updateOripa} deleteOripa={deleteOripa} duplicateOripa={duplicateOripa} clearLog={clearLog} />
       )}
       {storeSubTab === "customers" && (
         <CustomerMaster
@@ -4785,7 +4812,7 @@ function ExpectedValuePanel({ oripa, box }) {
 }
 
 // ---------- STORE: manage ----------
-function StoreManage({ oripaList, logsById, addOripa, updateOripa, deleteOripa, clearLog }) {
+function StoreManage({ oripaList, logsById, addOripa, updateOripa, deleteOripa, duplicateOripa, clearLog }) {
   const [expandedId, setExpandedId] = useState(null);
 
   return (
@@ -4795,6 +4822,7 @@ function StoreManage({ oripaList, logsById, addOripa, updateOripa, deleteOripa, 
           key={o.id}
           oripa={o}
           fullLog={(logsById && logsById[o.id]) || []}
+          duplicateOripa={duplicateOripa}
           expanded={expandedId === o.id}
           onToggle={() => setExpandedId(expandedId === o.id ? null : o.id)}
           updateOripa={updateOripa}
@@ -5173,7 +5201,7 @@ function BulkImportPanel({ oripa, set, onDone }) {
   );
 }
 
-function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, deleteOripa, clearLog }) {
+function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, deleteOripa, duplicateOripa, clearLog }) {
   const [newTierName, setNewTierName] = useState("");
   const [newTierAmount, setNewTierAmount] = useState("");
   const [newTierAmountForeign, setNewTierAmountForeign] = useState("");
@@ -5636,22 +5664,38 @@ function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, delete
                     style={{ ...inputStyle, fontFamily: FONT_BODY, flex: 2 }}
                   />
                   <input
-                    type="number"
-                    inputMode="numeric"
+                    type="text"
+                    inputMode="decimal"
                     value={oripa.lastOne.amount}
                     onChange={(e) => set((o) => ({ ...o, lastOne: { ...o.lastOne, amount: e.target.value } }))}
-                    placeholder="金額"
+                    onBlur={(e) => {
+                      const expanded = expandManShortcut(e.target.value);
+                      if (expanded !== e.target.value) {
+                        set((o) => ({ ...o, lastOne: { ...o.lastOne, amount: expanded } }));
+                      }
+                    }}
+                    placeholder="金額(7→7万)"
                     style={{ ...inputStyle, flex: 1 }}
                   />
                 </div>
                 <input
-                  type="number"
-                  inputMode="numeric"
+                  type="text"
+                  inputMode="decimal"
                   value={oripa.lastOne.amountForeign == null ? "" : oripa.lastOne.amountForeign}
                   onChange={(e) => set((o) => ({ ...o, lastOne: { ...o.lastOne, amountForeign: e.target.value === "" ? null : e.target.value } }))}
-                  placeholder="外国人価格(任意)"
+                  onBlur={(e) => {
+                    if (e.target.value === "") return;
+                    const expanded = expandManShortcut(e.target.value);
+                    if (expanded !== e.target.value) {
+                      set((o) => ({ ...o, lastOne: { ...o.lastOne, amountForeign: expanded } }));
+                    }
+                  }}
+                  placeholder="外国人価格(任意・7→7万)"
                   style={inputStyle}
                 />
+                <div style={{ fontSize: 10, color: C.muted, marginTop: -4 }}>
+                  💡 金額は「7」=70,000、「6.5」=65,000 のように万単位でも入力可
+                </div>
               </>
             )}
           </div>
@@ -5732,6 +5776,20 @@ function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, delete
           </div>
 
           <div className="flex flex-col gap-2 pt-2" style={{ borderTop: `1px dashed ${C.line}` }}>
+            {duplicateOripa && (
+              <button
+                onClick={() => {
+                  if (confirm(`「${oripa.name}」と同じ内容で新しいオリパを作成します。履歴は引き継ぎません。よろしいですか?`)) {
+                    duplicateOripa(oripa.id);
+                  }
+                }}
+                className="press flex items-center justify-center gap-1.5 py-2.5 rounded-lg"
+                style={{ border: `1px solid ${C.gold}`, color: C.gold, fontSize: 12, fontWeight: 700 }}
+              >
+                <Plus size={13} />
+                このオリパをコピーして新規作成(2回転目)
+              </button>
+            )}
             {!confirmClear ? (
               <button onClick={() => setConfirmClear(true)} className="press flex items-center justify-center gap-1.5 py-2.5 rounded-lg" style={{ border: `1px solid ${C.line}`, color: C.muted, fontSize: 12 }}>
                 <RotateCcw size={13} />
