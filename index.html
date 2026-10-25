@@ -4872,6 +4872,38 @@ function StoreManage({ oripaList, logsById, addOripa, updateOripa, deleteOripa, 
   const [expandedId, setExpandedId] = useState(null);
   const [showArchive, setShowArchive] = useState(false);
 
+  // 全オリパのあたりを横断して「カード名→直近の金額・外国人価格・ランク」を集めた予測変換辞書を作る。
+  // 終了済みオリパのアーカイブからも集める。
+  const cardSuggestions = useMemo(() => {
+    const map = new Map(); // name_lower → {name, amount, amountForeign, rank, lastSeen}
+    const absorb = (tiers, ts = Date.now()) => {
+      (tiers || []).forEach((t) => {
+        if (!t || !t.name) return;
+        const key = String(t.name).trim().toLowerCase();
+        if (!key) return;
+        const existing = map.get(key);
+        if (!existing || (existing.lastSeen || 0) < ts) {
+          map.set(key, {
+            name: String(t.name).trim(),
+            amount: Number(t.amount) || 0,
+            amountForeign: t.amountForeign == null ? null : (Number(t.amountForeign) || null),
+            rank: t.rank || null,
+            lastSeen: ts,
+          });
+        }
+      });
+    };
+    // 稼働中オリパ
+    (oripaList || []).forEach((o) => absorb(o.tiers, Date.now()));
+    // 終了済みアーカイブ(より古いので優先度は低いが、アーカイブに残ってる情報もサジェストで出す)
+    (endedOripaArchive || []).forEach((a) => {
+      const ts = a.endedAt || 0;
+      absorb(a.config && a.config.tiers, ts);
+    });
+    // 配列化(name順)
+    return Array.from(map.values()).sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
+  }, [oripaList, endedOripaArchive]);
+
   return (
     <div className="flex flex-col gap-3">
       {oripaList.map((o) => (
@@ -4879,6 +4911,7 @@ function StoreManage({ oripaList, logsById, addOripa, updateOripa, deleteOripa, 
           key={o.id}
           oripa={o}
           fullLog={(logsById && logsById[o.id]) || []}
+          cardSuggestions={cardSuggestions}
           duplicateOripa={duplicateOripa}
           endOripaWithArchive={endOripaWithArchive}
           expanded={expandedId === o.id}
@@ -5340,7 +5373,7 @@ function BulkImportPanel({ oripa, set, onDone }) {
   );
 }
 
-function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, deleteOripa, duplicateOripa, endOripaWithArchive, clearLog }) {
+function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, deleteOripa, duplicateOripa, endOripaWithArchive, clearLog, cardSuggestions = [] }) {
   const [newTierName, setNewTierName] = useState("");
   const [newTierAmount, setNewTierAmount] = useState("");
   const [newTierAmountForeign, setNewTierAmountForeign] = useState("");
@@ -5352,6 +5385,26 @@ function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, delete
   const [editingTierId, setEditingTierId] = useState(null);
   const [editDraft, setEditDraft] = useState(null); // { name, amount, amountForeign, rank }
   const [swipedTierId, setSwipedTierId] = useState(null); // revealing delete
+  const [showNameSuggest, setShowNameSuggest] = useState(false);
+
+  // 入力中の名前にマッチするカード候補(部分一致 → 金額の高い順、最大8件)
+  const nameSuggestions = useMemo(() => {
+    const q = newTierName.trim().toLowerCase();
+    if (!q) return [];
+    return (cardSuggestions || [])
+      .filter((s) => s.name.toLowerCase().includes(q) && s.name !== newTierName.trim())
+      .sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0))
+      .slice(0, 8);
+  }, [newTierName, cardSuggestions]);
+
+  const pickSuggestion = (s) => {
+    setNewTierName(s.name);
+    if (s.amount != null) setNewTierAmount(String(s.amount));
+    if (s.amountForeign != null) setNewTierAmountForeign(String(s.amountForeign));
+    else setNewTierAmountForeign("");
+    if (s.rank) setNewTierRank(s.rank);
+    setShowNameSuggest(false);
+  };
 
   const set = (updater) => updateOripa(oripa.id, updater);
 
@@ -5542,7 +5595,64 @@ function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, delete
               <span style={{ fontSize: 13, fontWeight: 700 }}>あたり金額</span>
             </div>
             <div className="flex gap-2">
-              <input value={newTierName} onChange={(e) => setNewTierName(e.target.value)} placeholder="名前(例: A賞)" style={{ ...inputStyle, fontFamily: FONT_BODY, flex: 2 }} />
+              <div style={{ flex: 2, position: "relative" }}>
+                <input
+                  value={newTierName}
+                  onChange={(e) => { setNewTierName(e.target.value); setShowNameSuggest(true); }}
+                  onFocus={() => setShowNameSuggest(true)}
+                  onBlur={() => setTimeout(() => setShowNameSuggest(false), 150)}
+                  placeholder="名前(例: シロナ、SM12 106/095)"
+                  style={{ ...inputStyle, fontFamily: FONT_BODY, width: "100%" }}
+                  autoComplete="off"
+                />
+                {showNameSuggest && nameSuggestions.length > 0 && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      right: 0,
+                      top: "100%",
+                      marginTop: 2,
+                      background: C.surfaceAlt2,
+                      border: `1px solid ${C.gold}`,
+                      borderRadius: 8,
+                      overflow: "hidden",
+                      zIndex: 20,
+                      maxHeight: 240,
+                      overflowY: "auto",
+                    }}
+                  >
+                    {nameSuggestions.map((s, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => pickSuggestion(s)}
+                        className="press w-full"
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          padding: "8px 10px",
+                          borderBottom: `1px solid ${C.line}`,
+                          background: "transparent",
+                          textAlign: "left",
+                        }}
+                      >
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", minWidth: 0, flex: 1 }}>
+                          <span style={{ fontSize: 12, color: C.paper, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%" }}>{s.name}</span>
+                          {s.rank && (
+                            <span style={{ fontSize: 9, color: RANK_GROUP_COLOR[s.rank] || C.muted, marginTop: 1 }}>
+                              {RANK_GROUP_LABEL[s.rank] || s.rank}
+                            </span>
+                          )}
+                        </div>
+                        <span style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.gold, marginLeft: 8, flexShrink: 0 }}>{yen(s.amount)}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               <input type="text" inputMode="decimal" value={newTierAmount} onChange={(e) => setNewTierAmount(e.target.value)} placeholder="7 → 70,000" style={{ ...inputStyle, flex: 1 }} />
             </div>
             <div className="flex gap-2 items-center">
