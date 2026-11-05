@@ -457,6 +457,21 @@ const MAX_ORIPA = Infinity; // 以前は 8 個制限だったが撤廃
 const yen = (n) => `¥${Math.round(Number(n) || 0).toLocaleString("ja-JP")}`;
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
+// 予測変換用の文字正規化: 大文字→小文字、全角→半角、ひらがな→カタカナ、空白と記号削除
+function normalizeForSearch(s) {
+  if (s == null) return "";
+  let x = String(s).toLowerCase();
+  // 全角英数を半角に
+  x = x.replace(/[！-～]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0));
+  // 全角スペースを半角に
+  x = x.replace(/　/g, " ");
+  // ひらがなをカタカナに(ヒット率を上げる: しろな ⇄ シロナ)
+  x = x.replace(/[ぁ-ゖ]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) + 0x60));
+  // スペース・記号・ハイフン類を削除(「SM12 106/095」「SM12106-095」どちらでもヒット)
+  x = x.replace(/[\s\-_/\\·.,。、・()（）\[\]【】{}『』「」&＆+＋*＊!！?？:：;；"'`~～@＠#＃$＄%％^＾]/g, "");
+  return x;
+}
+
 const newOripa = (n) => ({
   id: uid(),
   name: `オリパ${n}`,
@@ -1494,11 +1509,14 @@ function Toggle({ checked, onChange }) {
   );
 }
 
-function RateTable({ rows, onEditAmount = null }) {
+function RateTable({ rows, onEditAmount = null, onEditCount = null }) {
   // onEditAmount(row, newAmount) で金額一括更新。
+  // onEditCount(row, newCount) で封入数一括更新(追加/削除)。
   // 未指定なら従来の読み取り専用表示。
   const [editingKey, setEditingKey] = useState(null);
   const [draft, setDraft] = useState("");
+  const [editingCountKey, setEditingCountKey] = useState(null);
+  const [countDraft, setCountDraft] = useState("");
 
   const beginEdit = (r, i) => {
     const key = r.special || `${r.name}__${r.amount}__${i}`;
@@ -1513,23 +1531,37 @@ function RateTable({ rows, onEditAmount = null }) {
     onEditAmount(r, nextAmount);
     cancelEdit();
   };
+  const beginEditCount = (r, i) => {
+    const key = r.special || `${r.name}__${r.amount}__${i}`;
+    setEditingCountKey(key);
+    setCountDraft(String(r.count || 0));
+  };
+  const cancelEditCount = () => { setEditingCountKey(null); setCountDraft(""); };
+  const saveEditCount = (r) => {
+    if (!onEditCount) return cancelEditCount();
+    const n = Math.max(0, Math.min(9999, Math.round(Number(countDraft) || 0)));
+    onEditCount(r, n);
+    cancelEditCount();
+  };
 
   return (
     <div className="flex flex-col gap-1.5">
       <div className="grid gap-2 px-1" style={{ gridTemplateColumns: "1.6fr 0.9fr 1fr", fontSize: 10, color: C.muted }}>
         <span>名前</span>
-        <span className="text-right">封入率</span>
+        <span className="text-right">封入率{onEditCount ? "(タップで変更)" : ""}</span>
         <span className="text-right">金額{onEditAmount ? "(タップで編集)" : ""}</span>
       </div>
       {rows.map((r, i) => {
         const key = r.special || `${r.name}__${r.amount}__${i}`;
         const isEditing = editingKey === key;
+        const isEditingCount = editingCountKey === key;
         const canEdit = !!onEditAmount && !(r.special === "hazure" && !r.amount); // hazure amount 0 = guarantee未設定なので編集不可
+        const canEditCount = !!onEditCount && !r.special; // ラストワン/ハズレは封入数の対象外
         return (
           <div
             key={i}
             className="grid items-center gap-2 rounded-lg px-3 py-2"
-            style={{ gridTemplateColumns: "1.6fr 0.9fr 1fr", background: C.surfaceAlt, border: `1px solid ${isEditing ? C.gold : C.line}` }}
+            style={{ gridTemplateColumns: "1.6fr 0.9fr 1fr", background: C.surfaceAlt, border: `1px solid ${isEditing || isEditingCount ? C.gold : C.line}` }}
           >
             <div className="flex items-center gap-1.5 min-w-0">
               {r.special === "lastone" && <Crown size={12} color={C.gold} />}
@@ -1547,9 +1579,52 @@ function RateTable({ rows, onEditAmount = null }) {
                 {r.count > 1 ? ` ×${r.count}` : ""}
               </span>
             </div>
-            <span className="text-right" style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.paper }}>
-              {r.countLabel}
-            </span>
+            {isEditingCount ? (
+              <input
+                value={countDraft}
+                onChange={(e) => setCountDraft(e.target.value)}
+                onBlur={() => saveEditCount(r)}
+                onKeyDown={(e) => { if (e.key === "Enter") saveEditCount(r); if (e.key === "Escape") cancelEditCount(); }}
+                type="text"
+                inputMode="numeric"
+                autoFocus
+                style={{
+                  background: C.surfaceAlt2,
+                  border: `1px solid ${C.gold}`,
+                  color: C.gold,
+                  borderRadius: 6,
+                  padding: "4px 6px",
+                  width: "100%",
+                  fontFamily: FONT_MONO,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  textAlign: "right",
+                  minWidth: 0,
+                }}
+                placeholder="封入数"
+              />
+            ) : (
+              <button
+                onClick={() => canEditCount && beginEditCount(r, i)}
+                disabled={!canEditCount}
+                className={canEditCount ? "press" : ""}
+                style={{
+                  textAlign: "right",
+                  fontFamily: FONT_MONO,
+                  fontSize: 12,
+                  color: C.paper,
+                  background: "transparent",
+                  border: "none",
+                  cursor: canEditCount ? "pointer" : "default",
+                  textDecoration: canEditCount ? "underline dotted" : "none",
+                  textUnderlineOffset: 3,
+                  padding: 0,
+                  width: "100%",
+                }}
+              >
+                {r.countLabel}
+              </button>
+            )}
             {isEditing ? (
               <div className="flex items-center gap-1">
                 <input
@@ -1659,6 +1734,7 @@ function OripaCalculator() {
   const [inventory, setInventory] = useState([]); // [{id, name, purchasePrice, purchaseDate, qty, condition, serial, memo, createdAt, sales: [{id, soldPrice, soldDate, soldTo, qty, note, profit}]}]
   const [lastSettledAt, setLastSettledAt] = useState(0); // timestamp of last settleToday; sessions started before this are hidden from ActiveCustomers
   const [endedOripaArchive, setEndedOripaArchive] = useState([]); // 終了したオリパのスナップショット一覧(収支アーカイブ)
+  const [cardDictionary, setCardDictionary] = useState([]); // 予測変換用のカード辞書 [{id, name, amount, amountForeign, rank}]
 
   // ---- initial load ----
   useEffect(() => {
@@ -1743,6 +1819,10 @@ function OripaCalculator() {
         const r = await window.storage.get("oripa:endedOripaArchive", true);
         if (r && r.value) setEndedOripaArchive(JSON.parse(r.value));
       } catch (e) {}
+      try {
+        const r = await window.storage.get("oripa:cardDictionary", true);
+        if (r && r.value) setCardDictionary(JSON.parse(r.value));
+      } catch (e) {}
       setLoaded(true);
     })();
   }, []);
@@ -1807,6 +1887,7 @@ function OripaCalculator() {
         else if (key === "oripa:staffCompensation") setStaffCompensation(parsed || {});
         else if (key === "oripa:buybackDaily") setBuybackDaily(parsed || {});
         else if (key === "oripa:endedOripaArchive") setEndedOripaArchive(parsed || []);
+        else if (key === "oripa:cardDictionary") setCardDictionary(parsed || []);
         else if (key === "oripa:attendanceApprovals") setAttendanceApprovals(parsed || {});
         else if (key === "oripa:dailyPayrollFinalized") setDailyPayrollFinalized(parsed || {});
         else if (key === "oripa:inventory") setInventory(parsed || []);
@@ -2039,6 +2120,44 @@ function OripaCalculator() {
     setEndedOripaArchive(next);
     window.storage.set("oripa:endedOripaArchive", JSON.stringify(next), true).catch(() => {});
   };
+  // カード辞書 CRUD
+  const saveCardDictionary = (list) => {
+    setCardDictionary(list);
+    writeTimestampedBackup("oripa:cardDictionary", list);
+    window.storage.set("oripa:cardDictionary", JSON.stringify(list), true).catch(() => {});
+  };
+  const addCardToDictionary = (entry) => {
+    if (!entry || !entry.name || !String(entry.name).trim()) return;
+    const n = {
+      id: uid(),
+      name: String(entry.name).trim(),
+      amount: Number(entry.amount) || 0,
+      amountForeign: entry.amountForeign == null || entry.amountForeign === "" ? null : (Number(entry.amountForeign) || 0),
+      rank: entry.rank || null,
+    };
+    saveCardDictionary([...cardDictionary, n]);
+  };
+  const updateCardDictionary = (id, patch) => {
+    saveCardDictionary(cardDictionary.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  };
+  const deleteCardDictionary = (id) => {
+    saveCardDictionary(cardDictionary.filter((c) => c.id !== id));
+  };
+  const bulkImportCardDictionary = (lines) => {
+    const entries = (lines || []).map((row) => {
+      if (!row || !row.name) return null;
+      return {
+        id: uid(),
+        name: String(row.name).trim(),
+        amount: Number(row.amount) || 0,
+        amountForeign: row.amountForeign == null || row.amountForeign === "" ? null : (Number(row.amountForeign) || 0),
+        rank: row.rank || null,
+      };
+    }).filter((x) => x && x.name);
+    if (entries.length === 0) return 0;
+    saveCardDictionary([...cardDictionary, ...entries]);
+    return entries.length;
+  };
 
   const activeOripa = oripaList.find((o) => o.id === activeOripaId) || null;
 
@@ -2095,6 +2214,27 @@ function OripaCalculator() {
     }
     const req = { id: uid(), staffId: member.id, staffName: member.name, periodStart, entries, submittedAt: Date.now() };
     saveShiftRequests([...shiftRequests, req]);
+
+    // 【自動反映】: 提出したシフトは店長の承認を待たず即「確定シフト」にも反映する。
+    // (店長側はあとから編集/訂正可能。既存の確定エントリは残し、このスタッフの分だけ上書き。)
+    const workingEntries = (entries || [])
+      .filter((e) => e && (e.start || e.end))
+      .map((e) => ({
+        staffId: member.id,
+        staffName: member.name,
+        date: e.date,
+        start: e.start || "",
+        end: e.end || "",
+        note: e.note || "",
+      }));
+    const existing = confirmedShifts.find((c) => c.periodStart === periodStart);
+    const otherStaffEntries = existing ? existing.entries.filter((e) => e.staffId !== member.id) : [];
+    const nextEntries = [...otherStaffEntries, ...workingEntries];
+    if (existing) {
+      saveConfirmedShifts(confirmedShifts.map((c) => (c.periodStart === periodStart ? { ...c, entries: nextEntries, publishedAt: Date.now() } : c)));
+    } else {
+      saveConfirmedShifts([...confirmedShifts, { id: uid(), periodStart, entries: nextEntries, publishedAt: Date.now() }]);
+    }
   };
   const deleteShiftRequest = (id) => saveShiftRequests(shiftRequests.filter((r) => r.id !== id));
 
@@ -2317,6 +2457,14 @@ function OripaCalculator() {
     setLogsById((prev) => ({ ...prev, [session.oripaId]: newLog }));
     window.storage.set(`oripa:log:${session.oripaId}`, JSON.stringify(newLog), true).catch(() => {});
   };
+  // 過去の任意のエントリを個別削除(入力ミスの訂正用)
+  const deleteSessionLogEntry = (oripaId, entryId) => {
+    const fullLog = logsById[oripaId] || [];
+    const newLog = fullLog.filter((e) => e.id !== entryId);
+    if (newLog.length === fullLog.length) return;
+    setLogsById((prev) => ({ ...prev, [oripaId]: newLog }));
+    window.storage.set(`oripa:log:${oripaId}`, JSON.stringify(newLog), true).catch(() => {});
+  };
 
   const settleToday = () => {
     const key = todayKey();
@@ -2374,6 +2522,7 @@ function OripaCalculator() {
             recordSessionWin={recordSessionWin}
             setSessionHazureNotRedeemed={setSessionHazureNotRedeemed}
             undoLastSessionEntry={undoLastSessionEntry}
+            deleteSessionLogEntry={deleteSessionLogEntry}
             assignSessionStaff={assignSessionStaff}
             lastSettledAt={lastSettledAt}
           />
@@ -2424,6 +2573,11 @@ function OripaCalculator() {
               endOripaWithArchive={endOripaWithArchive}
               endedOripaArchive={endedOripaArchive}
               deleteEndedArchive={deleteEndedArchive}
+              cardDictionary={cardDictionary}
+              addCardToDictionary={addCardToDictionary}
+              updateCardDictionary={updateCardDictionary}
+              deleteCardDictionary={deleteCardDictionary}
+              bulkImportCardDictionary={bulkImportCardDictionary}
               clearLog={clearLog}
               customers={customers}
               sessions={sessions}
@@ -2975,6 +3129,11 @@ function StoreShell({
   endOripaWithArchive,
   endedOripaArchive,
   deleteEndedArchive,
+  cardDictionary,
+  addCardToDictionary,
+  updateCardDictionary,
+  deleteCardDictionary,
+  bulkImportCardDictionary,
   clearLog,
   customers,
   sessions,
@@ -3111,7 +3270,23 @@ function StoreShell({
 
       {storeSubTab === "aggregate" && <StoreAggregate oripaList={oripaList} logsById={logsById} />}
       {storeSubTab === "manage" && (
-        <StoreManage oripaList={oripaList} logsById={logsById} addOripa={addOripa} updateOripa={updateOripa} deleteOripa={deleteOripa} duplicateOripa={duplicateOripa} endOripaWithArchive={endOripaWithArchive} endedOripaArchive={endedOripaArchive} deleteEndedArchive={deleteEndedArchive} clearLog={clearLog} />
+        <StoreManage
+          oripaList={oripaList}
+          logsById={logsById}
+          addOripa={addOripa}
+          updateOripa={updateOripa}
+          deleteOripa={deleteOripa}
+          duplicateOripa={duplicateOripa}
+          endOripaWithArchive={endOripaWithArchive}
+          endedOripaArchive={endedOripaArchive}
+          deleteEndedArchive={deleteEndedArchive}
+          cardDictionary={cardDictionary}
+          addCardToDictionary={addCardToDictionary}
+          updateCardDictionary={updateCardDictionary}
+          deleteCardDictionary={deleteCardDictionary}
+          bulkImportCardDictionary={bulkImportCardDictionary}
+          clearLog={clearLog}
+        />
       )}
       {storeSubTab === "customers" && (
         <CustomerMaster
@@ -3211,7 +3386,7 @@ function StoreShell({
 }
 
 // ---------- STORE: 営業中のお客様管理 ----------
-function ActiveCustomers({ oripaList, logsById, sessions, customers, staff = [], startSession, endSession, reopenSession, recordSessionDraw, recordSessionWin, setSessionHazureNotRedeemed, undoLastSessionEntry, assignSessionStaff, lastSettledAt = 0 }) {
+function ActiveCustomers({ oripaList, logsById, sessions, customers, staff = [], startSession, endSession, reopenSession, recordSessionDraw, recordSessionWin, setSessionHazureNotRedeemed, undoLastSessionEntry, deleteSessionLogEntry, assignSessionStaff, lastSettledAt = 0 }) {
   const [formOpen, setFormOpen] = useState(false);
   const [name, setName] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -3450,6 +3625,7 @@ function ActiveCustomers({ oripaList, logsById, sessions, customers, staff = [],
                 onHazure={(count) => setSessionHazureNotRedeemed(s, count)}
                 onEnd={() => endSession(s.id)}
                 onUndo={() => undoLastSessionEntry(s)}
+                onDeleteEntry={(entryId) => deleteSessionLogEntry && deleteSessionLogEntry(s.oripaId, entryId)}
                 onAssignStaff={(sid) => assignSessionStaff && assignSessionStaff(s.id, sid)}
               />
             );
@@ -3625,7 +3801,7 @@ function RankGroupedPicker({ tiers, onPick, isForeign = false, consumedIds = nul
   );
 }
 
-function SessionCard({ session, oripa, fullLog, staff = [], onDraw, onWin, onHazure, onEnd, onUndo, onAssignStaff }) {
+function SessionCard({ session, oripa, fullLog, staff = [], onDraw, onWin, onHazure, onEnd, onUndo, onAssignStaff, onDeleteEntry }) {
   const [notRedeemedInput, setNotRedeemedInput] = useState(null);
   const [showWinPicker, setShowWinPicker] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -3896,12 +4072,12 @@ function SessionCard({ session, oripa, fullLog, staff = [], onDraw, onWin, onHaz
         </button>
       </div>
 
-      {showHistory && <PersonalHistory sessionLog={sessionLog} />}
+      {showHistory && <PersonalHistory sessionLog={sessionLog} onDeleteEntry={onDeleteEntry} />}
     </div>
   );
 }
 
-function PersonalHistory({ sessionLog }) {
+function PersonalHistory({ sessionLog, onDeleteEntry }) {
   const sorted = sessionLog.filter((e) => e.type === "win").sort((a, b) => b.ts - a.ts);
   const fmtTime = (ts) => {
     const d = new Date(ts);
@@ -3915,16 +4091,45 @@ function PersonalHistory({ sessionLog }) {
 
   return (
     <div className="flex flex-col gap-1.5 rounded-lg p-2" style={{ background: C.surfaceAlt2 }}>
+      {onDeleteEntry && (
+        <div style={{ fontSize: 10, color: C.muted, textAlign: "center", padding: "2px 0 4px" }}>
+          間違えたあたりは右の 🗑 ボタンで削除できます
+        </div>
+      )}
       {sorted.map((e) => (
         <div key={e.id} className="flex items-center justify-between rounded-lg px-2.5 py-2" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2" style={{ minWidth: 0, flex: 1 }}>
             {rowIcon(e)}
-            <div>
-              <div style={{ fontSize: 12 }}>{e.name}</div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.name}</div>
               <div style={{ fontSize: 9, color: C.muted, fontFamily: FONT_MONO }}>{fmtTime(e.ts)}</div>
             </div>
           </div>
-          <span style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 13, color: C.mint }}>+{yen(e.amount)}</span>
+          <div className="flex items-center gap-2">
+            <span style={{ fontFamily: FONT_MONO, fontWeight: 700, fontSize: 13, color: C.mint }}>+{yen(e.amount)}</span>
+            {onDeleteEntry && (
+              <button
+                onClick={() => {
+                  if (confirm(`このあたり「${e.name}(${yen(e.amount)})」の記録を削除します。よろしいですか?`)) {
+                    onDeleteEntry(e.id);
+                  }
+                }}
+                className="press rounded-md"
+                style={{
+                  background: "transparent",
+                  border: `1px solid ${C.coral}`,
+                  color: C.coral,
+                  fontSize: 11,
+                  fontWeight: 700,
+                  padding: "4px 8px",
+                  lineHeight: 1,
+                }}
+                aria-label="このあたり記録を削除"
+              >
+                🗑
+              </button>
+            )}
+          </div>
         </div>
       ))}
     </div>
@@ -4868,41 +5073,42 @@ function ExpectedValuePanel({ oripa, box }) {
 }
 
 // ---------- STORE: manage ----------
-function StoreManage({ oripaList, logsById, addOripa, updateOripa, deleteOripa, duplicateOripa, endOripaWithArchive, endedOripaArchive = [], deleteEndedArchive, clearLog }) {
+function StoreManage({ oripaList, logsById, addOripa, updateOripa, deleteOripa, duplicateOripa, endOripaWithArchive, endedOripaArchive = [], deleteEndedArchive, cardDictionary = [], addCardToDictionary, updateCardDictionary, deleteCardDictionary, bulkImportCardDictionary, clearLog }) {
   const [expandedId, setExpandedId] = useState(null);
   const [showArchive, setShowArchive] = useState(false);
 
-  // 全オリパのあたりを横断して「カード名→直近の金額・外国人価格・ランク」を集めた予測変換辞書を作る。
-  // 終了済みオリパのアーカイブからも集める。
+  // 全オリパのあたり + 終了アーカイブ + カード辞書 を横断して予測変換のマスターを作る。
+  // キーは「正規化後の名前」(ひらがな/カタカナ、全角/半角、空白/記号を無視)なので重複が排除される。
   const cardSuggestions = useMemo(() => {
-    const map = new Map(); // name_lower → {name, amount, amountForeign, rank, lastSeen}
-    const absorb = (tiers, ts = Date.now()) => {
+    const map = new Map(); // normalizedName → {name, amount, amountForeign, rank, lastSeen, fromDictionary}
+    const absorb = (tiers, ts, fromDictionary = false) => {
       (tiers || []).forEach((t) => {
         if (!t || !t.name) return;
-        const key = String(t.name).trim().toLowerCase();
+        const nameTrim = String(t.name).trim();
+        if (!nameTrim) return;
+        const key = normalizeForSearch(nameTrim);
         if (!key) return;
         const existing = map.get(key);
-        if (!existing || (existing.lastSeen || 0) < ts) {
+        // 辞書エントリは必ず残す。それ以外は最新のタイムスタンプ優先。
+        const score = (fromDictionary ? 1e15 : 0) + (ts || 0);
+        const existingScore = existing ? ((existing.fromDictionary ? 1e15 : 0) + (existing.lastSeen || 0)) : -1;
+        if (!existing || existingScore < score) {
           map.set(key, {
-            name: String(t.name).trim(),
+            name: nameTrim,
             amount: Number(t.amount) || 0,
             amountForeign: t.amountForeign == null ? null : (Number(t.amountForeign) || null),
             rank: t.rank || null,
-            lastSeen: ts,
+            lastSeen: ts || 0,
+            fromDictionary,
           });
         }
       });
     };
-    // 稼働中オリパ
     (oripaList || []).forEach((o) => absorb(o.tiers, Date.now()));
-    // 終了済みアーカイブ(より古いので優先度は低いが、アーカイブに残ってる情報もサジェストで出す)
-    (endedOripaArchive || []).forEach((a) => {
-      const ts = a.endedAt || 0;
-      absorb(a.config && a.config.tiers, ts);
-    });
-    // 配列化(name順)
-    return Array.from(map.values()).sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
-  }, [oripaList, endedOripaArchive]);
+    (endedOripaArchive || []).forEach((a) => absorb(a.config && a.config.tiers, a.endedAt || 0));
+    absorb(cardDictionary || [], Date.now(), true);
+    return Array.from(map.values());
+  }, [oripaList, endedOripaArchive, cardDictionary]);
 
   return (
     <div className="flex flex-col gap-3">
@@ -4934,6 +5140,192 @@ function StoreManage({ oripaList, logsById, addOripa, updateOripa, deleteOripa, 
         showArchive={showArchive}
         setShowArchive={setShowArchive}
       />
+
+      {/* カード辞書(予測変換のマスター) */}
+      <CardDictionaryPanel
+        cardDictionary={cardDictionary}
+        autoSuggestions={cardSuggestions}
+        addCardToDictionary={addCardToDictionary}
+        updateCardDictionary={updateCardDictionary}
+        deleteCardDictionary={deleteCardDictionary}
+        bulkImportCardDictionary={bulkImportCardDictionary}
+      />
+    </div>
+  );
+}
+
+function CardDictionaryPanel({ cardDictionary, autoSuggestions, addCardToDictionary, updateCardDictionary, deleteCardDictionary, bulkImportCardDictionary }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [amount, setAmount] = useState("");
+  const [amountForeign, setAmountForeign] = useState("");
+  const [rank, setRank] = useState("");
+  const [bulkText, setBulkText] = useState("");
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [query, setQuery] = useState("");
+
+  const totalSuggestions = (autoSuggestions || []).length;
+
+  const canAdd = name.trim() !== "";
+  const doAdd = () => {
+    if (!canAdd) return;
+    const resolvedAmount = expandManShortcut(amount);
+    const resolvedForeign = amountForeign === "" ? null : expandManShortcut(amountForeign);
+    addCardToDictionary && addCardToDictionary({
+      name: name.trim(),
+      amount: Number(resolvedAmount) || 0,
+      amountForeign: resolvedForeign,
+      rank: rank || null,
+    });
+    setName(""); setAmount(""); setAmountForeign(""); setRank("");
+  };
+
+  const doBulkImport = () => {
+    const lines = bulkText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const parsed = [];
+    for (const line of lines) {
+      // タブ or カンマ区切り: 名前, 金額, 外国人価格(任意), 枠(任意)
+      const parts = line.split(/[\t,]/).map((p) => p.trim());
+      if (!parts[0]) continue;
+      const row = {
+        name: parts[0],
+        amount: parts[1] ? (Number(expandManShortcut(parts[1])) || 0) : 0,
+        amountForeign: parts[2] ? (Number(expandManShortcut(parts[2])) || null) : null,
+        rank: parts[3] || null,
+      };
+      parsed.push(row);
+    }
+    if (parsed.length === 0) { alert("取り込めるデータがありません"); return; }
+    const n = bulkImportCardDictionary && bulkImportCardDictionary(parsed);
+    alert(`${n || 0}件を辞書に取り込みました`);
+    setBulkText("");
+    setBulkOpen(false);
+  };
+
+  const filteredDict = useMemo(() => {
+    const q = normalizeForSearch(query);
+    const list = (cardDictionary || []);
+    if (!q) return list;
+    return list.filter((c) => normalizeForSearch(c.name).includes(q));
+  }, [cardDictionary, query]);
+
+  return (
+    <div className="mt-2 flex flex-col gap-2 pt-3" style={{ borderTop: `1px dashed ${C.line}` }}>
+      <button
+        onClick={() => setOpen(!open)}
+        className="press flex items-center justify-between rounded-lg px-3 py-2.5"
+        style={{ background: C.surfaceAlt2, border: `1px solid ${C.line}` }}
+      >
+        <div className="flex items-center gap-2">
+          <ListPlus size={14} color={C.gold} />
+          <span style={{ fontSize: 12, fontWeight: 700, color: C.gold }}>カード辞書(予測変換のマスター)</span>
+          <span style={{ fontSize: 10, color: C.muted }}>辞書 {cardDictionary.length}件 / 総候補 {totalSuggestions}件</span>
+        </div>
+        <ChevronRight size={14} color={C.muted} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }} />
+      </button>
+
+      {open && (
+        <div className="flex flex-col gap-3 rounded-xl p-3" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+          <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.6 }}>
+            ここに登録したカードは、オリパあたり追加時の予測変換に出ます。<br/>
+            稼働中オリパ・終了オリパのあたりも自動で候補に入ります(合計 {totalSuggestions}件)。<br/>
+            ひらがな⇄カタカナ、全角⇄半角、空白・記号は無視して検索されます(例:「しろな」で「シロナ」ヒット)。
+          </div>
+
+          {/* 追加フォーム */}
+          <div className="flex flex-col gap-2 rounded-lg p-2" style={{ background: C.surfaceAlt2 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.gold }}>+ 新規追加</div>
+            <div className="flex gap-2">
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="カード名(例: シロナ SR)" style={{ ...inputStyle, fontFamily: FONT_BODY, flex: 2 }} />
+              <input type="text" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="金額(7→7万)" style={{ ...inputStyle, flex: 1 }} />
+            </div>
+            <div className="flex gap-2">
+              <input type="text" inputMode="decimal" value={amountForeign} onChange={(e) => setAmountForeign(e.target.value)} placeholder="外国人価格(任意)" style={{ ...inputStyle, flex: 1 }} />
+              <select value={rank} onChange={(e) => setRank(e.target.value)} style={{ ...inputStyle, fontFamily: FONT_BODY, flex: 1 }}>
+                <option value="">枠なし</option>
+                <option value="rainbow">虹枠</option>
+                <option value="gold">金枠</option>
+                <option value="silver">銀枠</option>
+                <option value="bronze">銅枠</option>
+                <option value="other">その他</option>
+              </select>
+            </div>
+            <button onClick={doAdd} disabled={!canAdd} className="press rounded-lg py-2" style={{ background: canAdd ? C.gold : C.surfaceAlt, color: canAdd ? C.ink : C.muted, fontSize: 12, fontWeight: 700 }}>
+              辞書に追加
+            </button>
+          </div>
+
+          {/* 一括貼り付け */}
+          <div>
+            {!bulkOpen ? (
+              <button onClick={() => setBulkOpen(true)} className="press rounded-lg px-3 py-2" style={{ border: `1px dashed ${C.gold}`, color: C.gold, fontSize: 11, fontWeight: 700, width: "100%" }}>
+                📋 複数行をまとめて貼り付け
+              </button>
+            ) : (
+              <div className="flex flex-col gap-2 rounded-lg p-2" style={{ background: C.surfaceAlt2 }}>
+                <div style={{ fontSize: 11, color: C.muted }}>1行1枚、カンマ or タブ区切り。順番: 名前, 金額, 外国人価格(任意), 枠(任意)</div>
+                <textarea
+                  value={bulkText}
+                  onChange={(e) => setBulkText(e.target.value)}
+                  placeholder={"シロナ SR, 12000, 11600, silver\nナンジャモ SAR, 85000, 82400, gold"}
+                  rows={6}
+                  style={{ ...inputStyle, fontFamily: FONT_MONO, fontSize: 11, resize: "vertical" }}
+                />
+                <div className="flex gap-2">
+                  <button onClick={() => { setBulkOpen(false); setBulkText(""); }} className="press rounded-lg py-2 flex-1" style={{ border: `1px solid ${C.line}`, color: C.paper, fontSize: 12 }}>
+                    キャンセル
+                  </button>
+                  <button onClick={doBulkImport} className="press rounded-lg py-2 flex-1" style={{ background: C.gold, color: C.ink, fontSize: 12, fontWeight: 700 }}>
+                    取り込む
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* 検索 */}
+          {cardDictionary.length > 0 && (
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="辞書を検索"
+              style={{ ...inputStyle, fontFamily: FONT_BODY, fontSize: 12 }}
+            />
+          )}
+
+          {/* 辞書一覧 */}
+          {cardDictionary.length === 0 ? (
+            <div style={{ fontSize: 11, color: C.muted, textAlign: "center", padding: 8 }}>
+              まだ辞書エントリはありません(稼働中オリパ・終了アーカイブから自動で {totalSuggestions} 件サジェストに入ります)
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1.5" style={{ maxHeight: 400, overflowY: "auto" }}>
+              {filteredDict.map((c) => (
+                <div key={c.id} className="flex items-center justify-between rounded-lg px-2.5 py-1.5" style={{ background: C.surfaceAlt, border: `1px solid ${C.line}` }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {c.name}
+                      {c.rank && <span style={{ fontSize: 9, color: RANK_GROUP_COLOR[c.rank] || C.muted, marginLeft: 6 }}>{RANK_GROUP_LABEL[c.rank] || c.rank}</span>}
+                    </div>
+                    <div style={{ fontSize: 10, color: C.muted, fontFamily: FONT_MONO }}>
+                      {yen(c.amount)}{c.amountForeign != null && c.amountForeign !== "" ? ` / 外 ${yen(c.amountForeign)}` : ""}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      if (confirm(`辞書から「${c.name}」を削除しますか?`)) deleteCardDictionary && deleteCardDictionary(c.id);
+                    }}
+                    className="press rounded-md px-2 py-1"
+                    style={{ border: `1px solid ${C.coral}`, color: C.coral, fontSize: 10 }}
+                  >
+                    削除
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -5387,14 +5779,28 @@ function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, delete
   const [swipedTierId, setSwipedTierId] = useState(null); // revealing delete
   const [showNameSuggest, setShowNameSuggest] = useState(false);
 
-  // 入力中の名前にマッチするカード候補(部分一致 → 金額の高い順、最大8件)
+  // 入力中の名前にマッチするカード候補(正規化+前方一致優先、金額の高い順、最大12件)
   const nameSuggestions = useMemo(() => {
-    const q = newTierName.trim().toLowerCase();
+    const q = normalizeForSearch(newTierName);
+    const rawQ = newTierName.trim();
     if (!q) return [];
-    return (cardSuggestions || [])
-      .filter((s) => s.name.toLowerCase().includes(q) && s.name !== newTierName.trim())
-      .sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0))
-      .slice(0, 8);
+    const scored = (cardSuggestions || [])
+      .filter((s) => s.name !== rawQ)
+      .map((s) => {
+        const n = normalizeForSearch(s.name);
+        if (!n.includes(q)) return null;
+        // ランクスコア: 完全一致(3) > 前方一致(2) > 部分一致(1)
+        let matchScore = 1;
+        if (n === q) matchScore = 3;
+        else if (n.startsWith(q)) matchScore = 2;
+        return { ...s, _match: matchScore };
+      })
+      .filter(Boolean);
+    scored.sort((a, b) => {
+      if (b._match !== a._match) return b._match - a._match;
+      return (Number(b.amount) || 0) - (Number(a.amount) || 0);
+    });
+    return scored.slice(0, 12);
   }, [newTierName, cardSuggestions]);
 
   const pickSuggestion = (s) => {
@@ -6017,6 +6423,35 @@ function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, delete
                     set((o) => ({
                       ...o,
                       tiers: o.tiers.map((t) => idSet.has(t.id) ? { ...t, amount: nextAmount } : t),
+                    }));
+                  }
+                }}
+                onEditCount={(row, nextCount) => {
+                  if (row.special) return; // ラストワン・ハズレは対象外
+                  if (!Array.isArray(row.ids) || row.ids.length === 0) return;
+                  const currentCount = row.ids.length;
+                  if (nextCount === currentCount) return;
+                  if (nextCount > currentCount) {
+                    // 追加: 既存のあたりをテンプレにして複製(IDは新規)
+                    set((o) => {
+                      const template = o.tiers.find((t) => row.ids.includes(t.id));
+                      if (!template) return o;
+                      const additions = Array.from({ length: nextCount - currentCount }, () => ({
+                        id: uid(),
+                        name: template.name,
+                        amount: template.amount,
+                        amountForeign: template.amountForeign == null ? null : template.amountForeign,
+                        rank: template.rank || null,
+                      }));
+                      return { ...o, tiers: [...o.tiers, ...additions] };
+                    });
+                  } else {
+                    // 削減: 該当グループのIDから末尾の (currentCount - nextCount) 件を削除
+                    const toRemoveCount = currentCount - nextCount;
+                    const removeIds = new Set(row.ids.slice(-toRemoveCount));
+                    set((o) => ({
+                      ...o,
+                      tiers: o.tiers.filter((t) => !removeIds.has(t.id)),
                     }));
                   }
                 }}
