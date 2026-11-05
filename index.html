@@ -1539,7 +1539,18 @@ function RateTable({ rows, onEditAmount = null, onEditCount = null }) {
   const cancelEditCount = () => { setEditingCountKey(null); setCountDraft(""); };
   const saveEditCount = (r) => {
     if (!onEditCount) return cancelEditCount();
-    const n = Math.max(0, Math.min(9999, Math.round(Number(countDraft) || 0)));
+    // "3", "3/500", "3 枚", "3.5" 等の入力から先頭の整数を抽出(parseInt は "3/500" でも 3 を返す)
+    const raw = String(countDraft || "").trim();
+    if (raw === "") return cancelEditCount(); // 空のまま離れても削除しない
+    const match = raw.match(/-?\d+/);
+    if (!match) return cancelEditCount(); // 数字が1つも入っていなければ無視
+    const n = Math.max(0, Math.min(9999, Math.round(Number(match[0]) || 0)));
+    // currentCount と同じならそのまま終了(編集解除のみ)
+    if (n === (r.count || 0)) return cancelEditCount();
+    // 0 への変更は確認(全削除になるので誤操作防止)
+    if (n === 0) {
+      if (!confirm(`「${r.name}」を全て削除しますか?(${r.count}個 → 0個)`)) return cancelEditCount();
+    }
     onEditCount(r, n);
     cancelEditCount();
   };
@@ -1601,7 +1612,7 @@ function RateTable({ rows, onEditAmount = null, onEditCount = null }) {
                   textAlign: "right",
                   minWidth: 0,
                 }}
-                placeholder="封入数"
+                placeholder="枚数(例:3)"
               />
             ) : (
               <button
@@ -6134,7 +6145,7 @@ function OripaEditCard({ oripa, fullLog, expanded, onToggle, updateOripa, delete
                     💡 行を右に長押しorスワイプで削除ボタン表示 / 鉛筆マークで編集
                   </div>
                   <div className="flex flex-col gap-2">
-                    {oripa.tiers.map((t) => {
+                    {[...oripa.tiers].sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0)).map((t) => {
                       const win = winByTierId[t.id];
                       const isConsumed = !!win;
                       const isEditing = editingTierId === t.id;
