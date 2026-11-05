@@ -55,6 +55,26 @@
   // last values we wrote ourselves (so we don't trigger our own "remote update")
   var lastWrittenJson = {};
 
+  // 同期ステータス: 画面上の「同期中/済み/エラー」表示用
+  // window.__syncState = { online, firebaseReady, pendingWrites, lastRemoteUpdateTs, lastWriteTs, lastError }
+  window.__syncState = {
+    online: navigator.onLine,
+    firebaseReady: false,
+    pendingWrites: 0,
+    lastRemoteUpdateTs: 0,
+    lastWriteTs: 0,
+    lastError: null,
+  };
+  function emitSyncChange() {
+    try { window.dispatchEvent(new CustomEvent("storage-sync-change", { detail: window.__syncState })); } catch (e) {}
+  }
+  function updateSync(patch) {
+    Object.assign(window.__syncState, patch || {});
+    emitSyncChange();
+  }
+  window.addEventListener("online", function () { updateSync({ online: true }); });
+  window.addEventListener("offline", function () { updateSync({ online: false }); });
+
   function readLocal() {
     try {
       var raw = window.localStorage.getItem(LS_PREFIX + "__data");
@@ -83,6 +103,7 @@
     });
   }
 
+  var dbRef = null;
   var firebaseReady = (async function () {
     try {
       await loadScript("https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js");
@@ -97,9 +118,13 @@
         await window.firebase.firestore().enablePersistence({ synchronizeTabs: true });
       } catch (e) { /* already enabled / multi-tab issue - ignore */ }
       var db = window.firebase.firestore();
+      dbRef = db;
+      updateSync({ firebaseReady: true });
       // start realtime listener on the shared doc
-      db.collection(COLLECTION).doc(DOC_ID).onSnapshot(function (snap) {
+      db.collection(COLLECTION).doc(DOC_ID).onSnapshot({ includeMetadataChanges: true }, function (snap) {
         if (!snap.exists) return;
+        // metadata.fromCache=true なら完全同期ではなく、キャッシュから読み出した状態
+        var fromCache = snap.metadata && snap.metadata.fromCache;
         var data = snap.data() || {};
         var changedKeys = [];
         // compare each key against our cache
@@ -130,17 +155,21 @@
             window.dispatchEvent(new CustomEvent("storage-remote-batch", { detail: { keys: changedKeys } }));
           } catch (e) {}
         }
+        updateSync({ lastRemoteUpdateTs: Date.now(), online: !fromCache, lastError: null });
       }, function (err) {
         console.warn("Firestore snapshot error:", err && err.message);
+        updateSync({ lastError: String(err && err.message || err) });
       });
       return db;
     } catch (e) {
       console.warn("Firebase init failed, falling back to local-only mode:", e && e.message);
+      updateSync({ lastError: "Firebase init failed: " + (e && e.message) });
       return null;
     }
   })();
 
   async function pushToFirestore(key, value, isDelete) {
+    updateSync({ pendingWrites: window.__syncState.pendingWrites + 1 });
     try {
       var db = await firebaseReady;
       if (!db) return;
@@ -151,8 +180,52 @@
         patch[key] = value;
       }
       await db.collection(COLLECTION).doc(DOC_ID).set(patch, { merge: true });
+      updateSync({ lastWriteTs: Date.now(), lastError: null });
     } catch (e) {
       // offline — the write will queue in Firestore's offline cache and sync later
+      updateSync({ lastError: "Write failed: " + (e && e.message) });
+    } finally {
+      updateSync({ pendingWrites: Math.max(0, window.__syncState.pendingWrites - 1) });
+    }
+  }
+
+  // 強制再同期: Firestore から shared/state ドキュメントを丸ごと取得してキャッシュを置換する
+  async function forceResync() {
+    try {
+      var db = await firebaseReady;
+      if (!db) return { ok: false, error: "Firebase not ready" };
+      updateSync({ pendingWrites: window.__syncState.pendingWrites + 1 });
+      var snap = await db.collection(COLLECTION).doc(DOC_ID).get({ source: "server" });
+      if (!snap.exists) {
+        updateSync({ pendingWrites: Math.max(0, window.__syncState.pendingWrites - 1) });
+        return { ok: true, note: "リモートにデータなし" };
+      }
+      var data = snap.data() || {};
+      var changedKeys = [];
+      // 新しい値をキャッシュに取り込み
+      Object.keys(data).forEach(function (k) {
+        if (JSON.stringify(data[k]) !== JSON.stringify(cache[k])) {
+          cache[k] = data[k];
+          changedKeys.push(k);
+        }
+      });
+      // リモート側で消えているキーをキャッシュからも削除
+      Object.keys(cache).forEach(function (k) {
+        if (!(k in data)) {
+          delete cache[k];
+          changedKeys.push(k);
+        }
+      });
+      writeLocal(cache);
+      // 全キーに対して remote-update を発火して React に反映させる
+      changedKeys.forEach(function (k) {
+        try { window.dispatchEvent(new CustomEvent("storage-remote-update", { detail: { key: k } })); } catch (e) {}
+      });
+      updateSync({ lastRemoteUpdateTs: Date.now(), lastError: null, online: true, pendingWrites: Math.max(0, window.__syncState.pendingWrites - 1) });
+      return { ok: true, changed: changedKeys.length };
+    } catch (e) {
+      updateSync({ lastError: "Resync failed: " + (e && e.message), pendingWrites: Math.max(0, window.__syncState.pendingWrites - 1) });
+      return { ok: false, error: String(e && e.message || e) };
     }
   }
 
@@ -174,12 +247,12 @@
       pushToFirestore(key, null, true);
       return { key: key, deleted: true, shared: true };
     },
+    forceResync: forceResync,
   };
 
   // Expose a readiness promise for the app
   window.__storageReady = firebaseReady;
 })();
-
 </script>
 <script type="text/babel" data-presets="react,env">
 const { useState, useEffect, useMemo, useCallback } = React;
@@ -2510,12 +2583,15 @@ function OripaCalculator() {
       `}</style>
 
       {/* header */}
-      <div className="flex items-center gap-2 px-5 pt-6 pb-4" style={{ borderBottom: `1px solid ${C.line}` }}>
-        <Ticket size={22} color={C.gold} />
-        <div>
-          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 18, letterSpacing: 0.5 }}>トレぴ店舗管理システム</div>
-          <div style={{ fontSize: 10, color: C.muted, letterSpacing: 2 }}>TOREPI STORE OS</div>
+      <div className="flex items-center justify-between gap-2 px-5 pt-6 pb-4" style={{ borderBottom: `1px solid ${C.line}` }}>
+        <div className="flex items-center gap-2">
+          <Ticket size={22} color={C.gold} />
+          <div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 18, letterSpacing: 0.5 }}>トレぴ店舗管理システム</div>
+            <div style={{ fontSize: 10, color: C.muted, letterSpacing: 2 }}>TOREPI STORE OS</div>
+          </div>
         </div>
+        <SyncStatus />
       </div>
 
       <div className="flex-1 overflow-y-auto px-5 pb-28 pt-4 max-w-md w-full mx-auto">
@@ -2653,6 +2729,110 @@ function OripaCalculator() {
           <NavBtn icon={storeUnlocked ? LockOpen : Lock} label="店舗" active={navTab === "store"} onClick={() => setNavTab("store")} />
         </div>
       </div>
+    </div>
+  );
+}
+
+function SyncStatus() {
+  // window.__syncState を監視して小さな表示 + 強制同期ボタンを出す
+  const [state, setState] = useState(() => (typeof window !== "undefined" && window.__syncState) || {
+    online: true, firebaseReady: false, pendingWrites: 0, lastRemoteUpdateTs: 0, lastWriteTs: 0, lastError: null,
+  });
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handler = (ev) => setState({ ...(ev.detail || window.__syncState) });
+    window.addEventListener("storage-sync-change", handler);
+    const tick = setInterval(() => setState({ ...(window.__syncState || {}) }), 5000);
+    return () => { window.removeEventListener("storage-sync-change", handler); clearInterval(tick); };
+  }, []);
+
+  const now = Date.now();
+  const lastTs = Math.max(state.lastRemoteUpdateTs || 0, state.lastWriteTs || 0);
+  const secondsAgo = lastTs ? Math.max(0, Math.floor((now - lastTs) / 1000)) : null;
+  const relTime = secondsAgo == null ? "—"
+    : secondsAgo < 60 ? `${secondsAgo}秒前`
+    : secondsAgo < 3600 ? `${Math.floor(secondsAgo / 60)}分前`
+    : `${Math.floor(secondsAgo / 3600)}時間前`;
+
+  const connected = !!state.firebaseReady && !!state.online;
+  const busyState = busy || (state.pendingWrites || 0) > 0;
+  const color = state.lastError ? C.coral : (busyState ? C.gold : (connected ? C.mint : C.muted));
+  const icon = state.lastError ? "⚠" : (busyState ? "🟡" : (connected ? "🟢" : "🔴"));
+  const label = state.lastError ? "エラー" : (busyState ? "同期中" : (connected ? "同期済" : "オフライン"));
+
+  const doResync = async () => {
+    if (typeof window === "undefined" || !window.storage || !window.storage.forceResync) return;
+    setBusy(true);
+    try {
+      const r = await window.storage.forceResync();
+      if (r && r.ok) {
+        // storage-remote-update イベントが全キーに飛んで state が更新される
+      } else {
+        alert("再同期に失敗しました: " + (r && r.error || ""));
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button
+        onClick={() => setOpen(!open)}
+        className="press rounded-full flex items-center gap-1.5"
+        style={{
+          background: C.surfaceAlt2,
+          border: `1px solid ${color}`,
+          color: color,
+          fontSize: 10,
+          fontWeight: 700,
+          padding: "4px 8px",
+        }}
+        title={`${label} / ${relTime}`}
+      >
+        <span style={{ fontSize: 9 }}>{icon}</span>
+        <span>{label}</span>
+      </button>
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            right: 0,
+            top: "100%",
+            marginTop: 6,
+            background: C.surfaceAlt2,
+            border: `1px solid ${C.line}`,
+            borderRadius: 10,
+            padding: 10,
+            zIndex: 100,
+            minWidth: 220,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+          }}
+        >
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>最終同期: {relTime}</div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>未送信書き込み: {state.pendingWrites || 0}件</div>
+          <div style={{ fontSize: 11, color: color, marginBottom: 8 }}>状態: {label}</div>
+          {state.lastError && (
+            <div style={{ fontSize: 10, color: C.coral, marginBottom: 8, wordBreak: "break-all" }}>
+              {String(state.lastError).slice(0, 180)}
+            </div>
+          )}
+          <button
+            onClick={doResync}
+            disabled={busy}
+            className="press rounded-lg py-1.5 w-full"
+            style={{ background: busy ? C.surfaceAlt : C.gold, color: busy ? C.muted : C.ink, fontSize: 11, fontWeight: 700 }}
+          >
+            {busy ? "再同期中…" : "🔄 強制再同期"}
+          </button>
+          <div style={{ fontSize: 9, color: C.muted, marginTop: 6, lineHeight: 1.4 }}>
+            他端末の変更が反映されない時にタップ。Firestoreから全データを強制取得します。
+          </div>
+        </div>
+      )}
     </div>
   );
 }
