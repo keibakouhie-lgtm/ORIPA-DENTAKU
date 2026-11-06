@@ -3,17 +3,19 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>データ復旧ツール</title>
+<title>データ復旧ツール v2</title>
 <style>
-  body { font-family: -apple-system, "Hiragino Kaku Gothic ProN", sans-serif; max-width: 680px; margin: 0 auto; padding: 20px; background: #12151C; color: #E8E9ED; line-height: 1.6; }
+  body { font-family: -apple-system, "Hiragino Kaku Gothic ProN", sans-serif; max-width: 720px; margin: 0 auto; padding: 20px; background: #12151C; color: #E8E9ED; line-height: 1.6; }
   h1 { font-size: 20px; margin: 10px 0 20px; color: #B8923E; }
   h2 { font-size: 15px; margin: 20px 0 8px; color: #B8923E; border-bottom: 1px solid #333; padding-bottom: 4px; }
   .box { background: #1B2029; border: 1px solid #333; border-radius: 10px; padding: 14px; margin-bottom: 14px; }
-  .btn { background: #B8923E; color: #12151C; border: none; padding: 14px 20px; font-size: 15px; border-radius: 8px; cursor: pointer; width: 100%; margin: 10px 0; font-weight: 700; }
+  .warn-box { background: #2b1a1a; border: 1px solid #C85540; border-radius: 10px; padding: 14px; margin-bottom: 14px; color: #ffd0c5; }
+  .btn { background: #B8923E; color: #12151C; border: none; padding: 12px 16px; font-size: 14px; border-radius: 8px; cursor: pointer; width: 100%; margin: 6px 0; font-weight: 700; }
   .btn:disabled { background: #555; color: #999; cursor: default; }
-  .btn.danger { background: #C85540; color: white; }
   .btn.safe { background: #4A8C64; color: white; }
-  .log { background: #0d0f14; padding: 10px; border-radius: 6px; font-family: Menlo, monospace; font-size: 11px; white-space: pre-wrap; max-height: 300px; overflow: auto; color: #B8C0CC; }
+  .btn.danger { background: #C85540; color: white; }
+  .btn.small { padding: 6px 10px; font-size: 11px; width: auto; }
+  .log { background: #0d0f14; padding: 10px; border-radius: 6px; font-family: Menlo, monospace; font-size: 11px; white-space: pre-wrap; max-height: 320px; overflow: auto; color: #B8C0CC; }
   .warn { color: #F4C165; }
   .ok { color: #6FCF8F; }
   .err { color: #E2694F; }
@@ -25,27 +27,44 @@
   details { background: #0d0f14; padding: 8px 12px; border-radius: 6px; margin: 6px 0; }
   summary { cursor: pointer; font-size: 12px; color: #B8C0CC; }
   pre { background: #0d0f14; padding: 8px; border-radius: 4px; font-size: 10px; overflow: auto; max-height: 240px; }
+  .snap-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; background: #0d0f14; border: 1px solid #333; border-radius: 6px; margin: 4px 0; }
+  .snap-row .info { font-size: 11px; }
+  .snap-row .ts { color: #7A8290; font-size: 10px; }
+  .snap-row .cnt { color: #B8923E; font-weight: 700; margin-left: 10px; }
 </style>
 </head>
 <body>
-<h1>🛟 トレぴ データ復旧ツール</h1>
-<p class="muted">このツールはあなたの端末のローカル保存(localStorage)に残っているデータを Firestore に押し戻します。消えたオリパ・従業員・シフトを復元する最後の手段です。</p>
+<h1>🛟 トレぴ データ復旧ツール v2 (時系列バックアップ対応)</h1>
+
+<div class="warn-box">
+  <strong>⚠ 重要:操作手順</strong><br/>
+  1. まずこの端末を <b>機内モード</b> にしてから、このページを開き直してください<br/>
+  2. 下の「ローカルの自動バックアップ履歴」で復旧したい時点を選ぶ<br/>
+  3. 復元ボタンを押すと、その時点のデータが Firestore に書き戻され、全端末で復活します<br/>
+  4. 機内モードを解除する前に Firestore への送信完了を確認してください
+</div>
 
 <div class="box">
-  <h2>Step 1: この端末のローカルデータ</h2>
+  <h2>Step 1: この端末のローカルデータ(現在)</h2>
   <div id="localInfo">読み込み中...</div>
 </div>
 
 <div class="box">
-  <h2>Step 2: Firestore(クラウド)の現状</h2>
+  <h2>Step 2: この端末の自動バックアップ履歴(最大10世代)</h2>
+  <div class="muted">保存のたびに記録された過去のスナップショットです。この端末でオリパ編集した履歴があればここに残っています。</div>
+  <div id="backupInfo" style="margin-top:10px;">読み込み中...</div>
+</div>
+
+<div class="box">
+  <h2>Step 3: Firestore(クラウド)の現状</h2>
   <div id="remoteInfo">接続中...</div>
 </div>
 
 <div class="box">
-  <h2>Step 3: 復旧実行</h2>
-  <p class="muted">「ローカルにあって Firestore にないデータ」および「ローカルの方が件数が多いキー」を Firestore に書き戻します。既に Firestore にあるキーは上書きしません(安全)。</p>
-  <button class="btn safe" id="btnRestore" disabled>⬆︎ ローカルのデータを Firestore に復元する</button>
-  <button class="btn danger" id="btnForce" disabled>⚠ 強制的にローカルで完全上書きする(危険)</button>
+  <h2>Step 4: 復元実行</h2>
+  <p class="muted">ステップ2の履歴から選んだスナップショットを Firestore に書き戻します。この操作は全端末に反映されます。</p>
+  <button class="btn safe" id="btnRestoreCurrent" disabled>⬆︎ 現在のローカルデータを Firestore に復元</button>
+  <button class="btn danger" id="btnForce" disabled>⚠ 強制的に現在のローカルで完全上書き</button>
 </div>
 
 <div class="box">
@@ -67,8 +86,12 @@ function log(msg, cls) {
 }
 
 const LS_KEY = 'oripa_app::__data';
+const BACKUP_PREFIX = 'oripa_backup::';
+const BACKUP_KEYS = ['oripa:list', 'oripa:staff', 'oripa:customers', 'oripa:shiftRequests', 'oripa:confirmedShifts', 'oripa:cardDictionary', 'oripa:buyback', 'oripa:endedOripaArchive'];
+
 let localData = {};
 let remoteData = {};
+let backupsByKey = {}; // key → [{ts, value}, ...]
 
 function readLocal() {
   try {
@@ -77,8 +100,23 @@ function readLocal() {
   } catch(e) { return {}; }
 }
 
+function readBackups() {
+  const result = {};
+  for (const key of BACKUP_KEYS) {
+    const histKey = BACKUP_PREFIX + key;
+    try {
+      const raw = localStorage.getItem(histKey);
+      if (raw) {
+        const hist = JSON.parse(raw);
+        if (Array.isArray(hist)) result[key] = hist;
+      }
+    } catch(e) {}
+  }
+  return result;
+}
+
 function summarize(data) {
-  const keys = Object.keys(data);
+  const keys = Object.keys(data || {});
   const result = { keys: keys.length, counts: {} };
   for (const k of keys) {
     const v = data[k];
@@ -94,34 +132,96 @@ function summarize(data) {
   return result;
 }
 
-function renderInfo(elId, data, label) {
+function countOf(value) {
+  try {
+    const p = typeof value === 'string' ? JSON.parse(value) : value;
+    if (Array.isArray(p)) return p.length;
+    if (typeof p === 'object' && p) return Object.keys(p).length;
+    return value ? 1 : 0;
+  } catch(e) { return '?'; }
+}
+
+function renderInfo(elId, data) {
   const summary = summarize(data);
   const el = document.getElementById(elId);
-  let html = `<div class="kv"><span class="k">合計キー数</span><span class="v">${summary.keys}</span></div>`;
-  const importantKeys = ['oripa:list', 'oripa:staff', 'oripa:shiftRequests', 'oripa:confirmedShifts', 'oripa:customers', 'oripa:sessions', 'oripa:timePunches', 'oripa:buyback', 'oripa:expenses', 'oripa:staffCompensation'];
-  for (const k of importantKeys) {
+  let html = '<div class="kv"><span class="k">合計キー数</span><span class="v">' + summary.keys + '</span></div>';
+  const important = ['oripa:list', 'oripa:staff', 'oripa:shiftRequests', 'oripa:confirmedShifts', 'oripa:customers', 'oripa:sessions', 'oripa:cardDictionary', 'oripa:endedOripaArchive'];
+  for (const k of important) {
     const c = summary.counts[k];
-    html += `<div class="kv"><span class="k">${k}</span><span class="v">${c !== undefined ? c + '件' : '(なし)'}</span></div>`;
+    html += '<div class="kv"><span class="k">' + k + '</span><span class="v">' + (c !== undefined ? c + '件' : '(なし)') + '</span></div>';
   }
-  // oripa:log:xxx counts
-  const logKeys = Object.keys(summary.counts).filter(k => k.startsWith('oripa:log:'));
-  if (logKeys.length) {
-    html += `<div class="kv"><span class="k">あたり履歴(oripa:log:*)</span><span class="v">${logKeys.length}個 / 合計${logKeys.reduce((a,k)=>a+(Number(summary.counts[k])||0),0)}件</span></div>`;
-  }
-  html += `<details><summary>全キー一覧(クリックで展開)</summary><pre>${Object.entries(summary.counts).map(([k,v])=>`${k}: ${v}`).join('\n')}</pre></details>`;
   el.innerHTML = html;
 }
+
+function fmtTime(ts) {
+  if (!ts) return '?';
+  const d = new Date(ts);
+  const now = new Date();
+  const dateStr = d.getFullYear() + '/' + String(d.getMonth()+1).padStart(2,'0') + '/' + String(d.getDate()).padStart(2,'0');
+  const timeStr = String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+  const sameDay = d.getFullYear()===now.getFullYear() && d.getMonth()===now.getMonth() && d.getDate()===now.getDate();
+  return sameDay ? '今日 ' + timeStr : dateStr + ' ' + timeStr;
+}
+
+function renderBackups() {
+  const el = document.getElementById('backupInfo');
+  const keys = Object.keys(backupsByKey);
+  if (keys.length === 0) {
+    el.innerHTML = '<div class="muted" style="padding:10px; text-align:center; color:#F4C165;">自動バックアップはこの端末に残っていません。別の端末で試してください。</div>';
+    return;
+  }
+  let html = '';
+  for (const key of keys) {
+    const snaps = backupsByKey[key];
+    if (!snaps || snaps.length === 0) continue;
+    const sorted = [...snaps].sort((a,b) => (b.ts||0) - (a.ts||0));
+    html += '<details open><summary><b>' + key + '</b> (' + snaps.length + '世代の履歴)</summary>';
+    for (let i = 0; i < sorted.length; i++) {
+      const s = sorted[i];
+      const cnt = countOf(s.value);
+      html += '<div class="snap-row">';
+      html += '<div class="info"><div>#' + (i+1) + ' <span class="ts">' + fmtTime(s.ts) + '</span></div><div class="cnt">' + cnt + '件</div></div>';
+      html += '<button class="btn safe small" onclick="restoreSnapshot(\'' + key + '\',' + s.ts + ')">この版で復元</button>';
+      html += '</div>';
+    }
+    html += '</details>';
+  }
+  el.innerHTML = html;
+}
+
+async function restoreSnapshot(key, ts) {
+  const snaps = backupsByKey[key] || [];
+  const snap = snaps.find(s => s.ts === ts);
+  if (!snap) { alert('スナップショットが見つかりません'); return; }
+  const cnt = countOf(snap.value);
+  if (!confirm('「' + key + '」をこの時点(' + fmtTime(ts) + ' / ' + cnt + '件)に復元します。Firestore に書き込まれ、全端末に反映されます。よろしいですか?')) return;
+  log('復元開始: ' + key + ' @ ' + fmtTime(ts) + ' (' + cnt + '件)');
+  try {
+    const db = firebase.firestore();
+    const payload = {};
+    const val = snap.value;
+    payload[key] = typeof val === 'string' ? val : JSON.stringify(val);
+    await db.collection('shared').doc('state').set(payload, { merge: true });
+    log('✓ 復元成功: ' + key + ' を Firestore に書き戻しました', 'ok');
+    log('\nアプリ(https://keibakouhie-lgtm.github.io/ORIPA-DENTAKU/)を全端末でリロードして確認してください。', 'ok');
+  } catch (e) {
+    log('✗ 復元失敗: ' + e.message, 'err');
+  }
+}
+window.restoreSnapshot = restoreSnapshot;
 
 async function init() {
   log('ローカルデータ読み込み中...');
   localData = readLocal();
   const lSum = summarize(localData);
   log('✓ ローカルキー数: ' + lSum.keys, 'ok');
-  renderInfo('localInfo', localData, 'ローカル');
+  renderInfo('localInfo', localData);
 
-  if (lSum.keys === 0) {
-    log('⚠ この端末のローカルにはデータがありません。別の端末(オリパ・シフトが見えていた端末)でこのツールを開いてください。', 'warn');
-  }
+  log('バックアップ履歴を確認中...');
+  backupsByKey = readBackups();
+  const backupKeyCount = Object.keys(backupsByKey).length;
+  log(backupKeyCount > 0 ? '✓ バックアップ履歴: ' + backupKeyCount + '種類 検出' : '⚠ バックアップ履歴なし', backupKeyCount > 0 ? 'ok' : 'warn');
+  renderBackups();
 
   log('Firebase接続中...');
   try {
@@ -136,75 +236,47 @@ async function init() {
     await firebase.auth().signInAnonymously();
     log('✓ Firebase認証OK', 'ok');
     const db = firebase.firestore();
-    const snap = await db.collection('shared').doc('state').get();
+    const snap = await db.collection('shared').doc('state').get({ source: 'server' });
     remoteData = snap.exists ? (snap.data() || {}) : {};
     const rSum = summarize(remoteData);
     log('✓ Firestoreキー数: ' + rSum.keys, 'ok');
-    renderInfo('remoteInfo', remoteData, 'Firestore');
+    renderInfo('remoteInfo', remoteData);
 
-    // Enable restore button if local has data that remote lacks or is bigger
-    const lKeys = Object.keys(localData);
-    let canRestore = false;
-    for (const k of lKeys) {
-      const lv = localData[k];
-      const rv = remoteData[k];
-      const lLen = Array.isArray(lv) ? lv.length : (typeof lv === 'string' ? (() => { try { const p = JSON.parse(lv); return Array.isArray(p) ? p.length : 1; } catch(e) { return 1; } })() : 1);
-      const rLen = Array.isArray(rv) ? rv.length : (typeof rv === 'string' ? (() => { try { const p = JSON.parse(rv); return Array.isArray(p) ? p.length : 1; } catch(e) { return 1; } })() : (rv ? 1 : 0));
-      if (!(k in remoteData) || lLen > rLen) { canRestore = true; break; }
-    }
-    if (canRestore) {
-      document.getElementById('btnRestore').disabled = false;
-      log('✓ 復元可能なデータが見つかりました。「復元する」ボタンを押してください。', 'ok');
-    } else {
-      log('ℹ Firestoreはすでにローカルと同等以上のデータを持っています。復元不要です。', 'warn');
-    }
+    document.getElementById('btnRestoreCurrent').disabled = false;
     document.getElementById('btnForce').disabled = false;
   } catch (e) {
     log('✗ Firebase接続失敗: ' + e.message, 'err');
+    document.getElementById('remoteInfo').innerHTML = '<div class="warn">接続失敗(オフラインかも) - バックアップ復元機能は使えません</div>';
   }
 }
 
-document.getElementById('btnRestore').addEventListener('click', async () => {
-  const btn = document.getElementById('btnRestore');
+document.getElementById('btnRestoreCurrent').addEventListener('click', async () => {
+  if (!confirm('この端末の「現在のローカルデータ」で、Firestoreを上書きします。他端末の変更は失われます。実行しますか?')) return;
+  const btn = document.getElementById('btnRestoreCurrent');
   btn.disabled = true;
   btn.textContent = '復元中...';
   try {
     const db = firebase.firestore();
-    const patch = {};
-    let changed = 0;
-    for (const k of Object.keys(localData)) {
-      const lv = localData[k];
-      const rv = remoteData[k];
-      const lLen = Array.isArray(lv) ? lv.length : (typeof lv === 'string' ? (() => { try { const p = JSON.parse(lv); return Array.isArray(p) ? p.length : 1; } catch(e) { return 1; } })() : 1);
-      const rLen = Array.isArray(rv) ? rv.length : (typeof rv === 'string' ? (() => { try { const p = JSON.parse(rv); return Array.isArray(p) ? p.length : 1; } catch(e) { return 1; } })() : (rv ? 1 : 0));
-      if (!(k in remoteData) || lLen > rLen) {
-        patch[k] = lv;
-        changed++;
-        log('  ↑ ' + k + ' (local:' + lLen + ' > remote:' + rLen + ')', 'ok');
-      }
-    }
-    if (changed === 0) { log('変更なし。', 'warn'); btn.textContent = '復元不要'; return; }
-    await db.collection('shared').doc('state').set(patch, { merge: true });
-    log('\n✓ ' + changed + '件のキーを復元しました!', 'ok');
-    log('アプリ(https://keibakouhie-lgtm.github.io/ORIPA-DENTAKU/)を再読み込みして確認してください。', 'ok');
+    await db.collection('shared').doc('state').set(localData, { merge: false });
+    log('✓ Firestore を現在のローカルで上書きしました', 'ok');
     btn.textContent = '✓ 復元完了';
   } catch (e) {
-    log('✗ 復元失敗: ' + e.message, 'err');
+    log('✗ 失敗: ' + e.message, 'err');
     btn.disabled = false;
     btn.textContent = '再試行';
   }
 });
 
 document.getElementById('btnForce').addEventListener('click', async () => {
-  if (!confirm('【警告】\n\nFirestoreをローカルデータで完全上書きします。他の端末で入れた新しいデータが消える可能性があります。\n\n続行しますか?')) return;
+  if (!confirm('【警告】\n\nFirestoreを完全に消去してローカルデータで置き換えます。復元不可。続行しますか?')) return;
   const btn = document.getElementById('btnForce');
   btn.disabled = true;
   btn.textContent = '上書き中...';
   try {
     const db = firebase.firestore();
     await db.collection('shared').doc('state').set(localData, { merge: false });
-    log('✓ Firestoreをローカルデータで完全上書きしました', 'ok');
-    btn.textContent = '✓ 上書き完了';
+    log('✓ 上書き完了', 'ok');
+    btn.textContent = '✓ 完了';
   } catch (e) {
     log('✗ 失敗: ' + e.message, 'err');
     btn.disabled = false;
