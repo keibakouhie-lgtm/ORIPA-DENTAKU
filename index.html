@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
+<!-- BUILD: 2026-11-10T14:32:08+09:00 -->
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>トレぴ店舗管理システム</title>
@@ -33,10 +34,50 @@
 <script>
 // Firebase-backed storage shim with real-time multi-device sync.
 // Interface compatible with the previous local shim: window.storage.{get,set,delete}
-// Reads/writes to Firestore + localStorage (local as cache / offline fallback).
-// Dispatches a window event "storage-remote-update" with { detail: { key } } when
-// a remote device changes a key, so the app can re-read and refresh its React state.
+//
+// 【5重の安全装置】
+// 1. BUILD_TIME 自動チェック: 新しい HTML が GitHub にあれば自動リロード
+// 2. バージョン記録: Firestore に __latestBuild を記録し、古い HTML は書き込み禁止
+// 3. 初回同期待ち: Firestore から1回でも最新データを受信するまで Firestore 書き込み禁止
+// 4. 大幅減少警告: 重要キーが半分以下に減ろうとしたら確認ダイアログ
+// 5. __clientBuild フィールド付与: 全書き込みにビルド時刻を添付(Firestore ルールで古い HTML をブロック可能)
 (function () {
+  // ============================================================
+  // BUILD_TIME — 新しい HTML をビルドするたび書き換わる
+  // ============================================================
+  var BUILD_TIME = "2026-11-10T14:32:08+09:00";
+  window.__APP_BUILD_TIME = BUILD_TIME;
+
+  // ============================================================
+  // 自動アップデート: 新しい HTML が GitHub にあれば自動リロード
+  // ============================================================
+  (async function autoUpdateCheck() {
+    try {
+      // 無限ループ防止: 同じビルドなら再チェックしない
+      var marker = "__app_update_checked_" + BUILD_TIME;
+      if (sessionStorage.getItem(marker)) return;
+      sessionStorage.setItem(marker, "1");
+
+      var url = location.pathname + "?nocache=" + Date.now();
+      var res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) return;
+      var text = await res.text();
+      var m = text.match(/BUILD_TIME\s*=\s*"([^"]+)"/);
+      if (!m) return;
+      var remoteBuild = m[1];
+      if (remoteBuild === BUILD_TIME) return; // 同じ
+      // 新バージョン検出 → 即リロード(ユーザーに見せる前)
+      console.warn("[APP-UPDATE] " + BUILD_TIME + " → " + remoteBuild + " リロードします");
+      location.replace(location.pathname + "?v=" + encodeURIComponent(remoteBuild));
+    } catch (e) {
+      // オフライン等 → 既存バージョンで起動
+      console.warn("[APP-UPDATE] skip:", e && e.message);
+    }
+  })();
+
+  // ============================================================
+  // Firebase 設定
+  // ============================================================
   var FIREBASE_CONFIG = {
     apiKey: "AIzaSyB8mS7AKtMAA_WWXjWGEnNgxrt2xOfXtbE",
     authDomain: "torepi-store.firebaseapp.com",
@@ -48,15 +89,13 @@
 
   var LS_PREFIX = "oripa_app::";
   var COLLECTION = "shared";
-  var DOC_ID = "state"; // single document holding all keys of the shared store
+  var DOC_ID = "state";
+  var VERSION_DOC_ID = "version";
 
-  // local cache (also stored in localStorage for offline)
   var cache = {};
-  // last values we wrote ourselves (so we don't trigger our own "remote update")
   var lastWrittenJson = {};
 
-  // 同期ステータス: 画面上の「同期中/済み/エラー」表示用
-  // window.__syncState = { online, firebaseReady, pendingWrites, lastRemoteUpdateTs, lastWriteTs, lastError }
+  // 同期ステータス
   window.__syncState = {
     online: navigator.onLine,
     firebaseReady: false,
@@ -64,6 +103,10 @@
     lastRemoteUpdateTs: 0,
     lastWriteTs: 0,
     lastError: null,
+    buildTime: BUILD_TIME,
+    firstSyncComplete: false,
+    versionCheckPassed: null, // null=未判定 / true=OK / false=このHTMLは古い
+    isOldVersion: false,
   };
   function emitSyncChange() {
     try { window.dispatchEvent(new CustomEvent("storage-sync-change", { detail: window.__syncState })); } catch (e) {}
@@ -79,9 +122,7 @@
     try {
       var raw = window.localStorage.getItem(LS_PREFIX + "__data");
       return raw ? JSON.parse(raw) : {};
-    } catch (e) {
-      return {};
-    }
+    } catch (e) { return {}; }
   }
   function writeLocal(obj) {
     try {
@@ -91,8 +132,6 @@
 
   cache = readLocal();
 
-  // Minimal fire-and-forget Firebase SDK via CDN. We use the "compat" (v8 style) build
-  // because it's a single global `firebase` object, easy to use without a bundler.
   function loadScript(src) {
     return new Promise(function (resolve, reject) {
       var s = document.createElement("script");
@@ -103,6 +142,89 @@
     });
   }
 
+  // ============================================================
+  // 書き込みガード
+  // 初回同期前の書き込みは「古いローカル」に基づく可能性が高いので、
+  // 流さず破棄する(Mac事故の根本原因と同じパターンを防ぐ)。
+  // ユーザーが本当に操作した場合は、同期後に React 側がもう一度 set() を呼ぶ。
+  // ============================================================
+  var firstSyncComplete = false;
+  var droppedWritesCount = 0;
+  function dropPendingWrites() {
+    // 初回同期前の書き込みは全て捨てる(安全)
+    droppedWritesCount = 0;
+  }
+
+  // ============================================================
+  // 大幅減少検知
+  // ============================================================
+  var IMPORTANT_KEYS = ["oripa:list", "oripa:staff", "oripa:customers", "oripa:endedOripaArchive", "oripa:cardDictionary"];
+  function countItems(value) {
+    try {
+      var p = typeof value === "string" ? JSON.parse(value) : value;
+      if (Array.isArray(p)) return p.length;
+      if (p && typeof p === "object") return Object.keys(p).length;
+      return value ? 1 : 0;
+    } catch (e) { return 0; }
+  }
+  function detectLargeDecrease(key, newValue) {
+    if (IMPORTANT_KEYS.indexOf(key) < 0) return null;
+    var oldCount = countItems(cache[key]);
+    var newCount = countItems(newValue);
+    if (oldCount >= 5 && newCount <= Math.floor(oldCount * 0.5)) {
+      return { oldCount: oldCount, newCount: newCount };
+    }
+    return null;
+  }
+
+  // ============================================================
+  // Firestore バージョン記録・比較
+  // ============================================================
+  async function versionCheckAndRegister(db) {
+    try {
+      var snap = await db.collection(COLLECTION).doc(VERSION_DOC_ID).get({ source: "server" });
+      var remoteBuild = null;
+      if (snap.exists) {
+        var d = snap.data();
+        remoteBuild = d && d.latestBuild;
+      }
+      if (!remoteBuild || BUILD_TIME >= remoteBuild) {
+        try {
+          await db.collection(COLLECTION).doc(VERSION_DOC_ID).set({
+            latestBuild: BUILD_TIME,
+            latestBuildAt: Date.now(),
+            __clientBuild: BUILD_TIME,
+          }, { merge: true });
+        } catch (e) {
+          console.warn("[APP] version doc write failed:", e && e.message);
+        }
+        updateSync({ versionCheckPassed: true, isOldVersion: false });
+        return true;
+      } else {
+        console.warn("[APP] This HTML is OLD:", BUILD_TIME, "<", remoteBuild);
+        updateSync({ versionCheckPassed: false, isOldVersion: true });
+        try {
+          setTimeout(function () {
+            if (!window.__oldVersionWarned) {
+              window.__oldVersionWarned = true;
+              var msg = "⚠ このアプリは古いバージョンです\n\n" +
+                        "最新版: " + remoteBuild + "\n" +
+                        "現在版: " + BUILD_TIME + "\n\n" +
+                        "Firestore への保存は無効化されます。\n" +
+                        "ページをリロード(更新)して最新版を取得してください。";
+              alert(msg);
+            }
+          }, 800);
+        } catch (e) {}
+        return false;
+      }
+    } catch (e) {
+      console.warn("[APP] versionCheck error:", e && e.message);
+      updateSync({ versionCheckPassed: true });
+      return true;
+    }
+  }
+
   var dbRef = null;
   var firebaseReady = (async function () {
     try {
@@ -111,24 +233,30 @@
       await loadScript("https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js");
       if (!window.firebase) throw new Error("firebase global missing");
       window.firebase.initializeApp(FIREBASE_CONFIG);
-      // anonymous sign-in
       await window.firebase.auth().signInAnonymously();
-      // enable offline persistence (so when offline, writes queue and reads use cache)
       try {
         await window.firebase.firestore().enablePersistence({ synchronizeTabs: true });
-      } catch (e) { /* already enabled / multi-tab issue - ignore */ }
+      } catch (e) {}
       var db = window.firebase.firestore();
       dbRef = db;
       updateSync({ firebaseReady: true });
-      // start realtime listener on the shared doc
+
+      // バージョンチェック(結果は versionCheckPassed に入る)
+      versionCheckAndRegister(db);
+
       db.collection(COLLECTION).doc(DOC_ID).onSnapshot({ includeMetadataChanges: true }, function (snap) {
-        if (!snap.exists) return;
-        // metadata.fromCache=true なら完全同期ではなく、キャッシュから読み出した状態
+        if (!snap.exists) {
+          if (!firstSyncComplete) {
+            firstSyncComplete = true;
+            updateSync({ firstSyncComplete: true });
+          }
+          return;
+        }
         var fromCache = snap.metadata && snap.metadata.fromCache;
         var data = snap.data() || {};
         var changedKeys = [];
-        // compare each key against our cache
         Object.keys(data).forEach(function (k) {
+          if (k === "__clientBuild" || k === "__clientBuildAt" || k === "latestBuild" || k === "latestBuildAt") return;
           var newVal = data[k];
           var oldVal = cache[k];
           if (JSON.stringify(newVal) !== JSON.stringify(oldVal)) {
@@ -136,7 +264,6 @@
             changedKeys.push(k);
           }
         });
-        // keys deleted remotely
         Object.keys(cache).forEach(function (k) {
           if (!(k in data)) {
             delete cache[k];
@@ -145,30 +272,42 @@
         });
         if (changedKeys.length > 0) {
           writeLocal(cache);
-          // dispatch events so the app can re-render
           changedKeys.forEach(function (k) {
-            try {
-              window.dispatchEvent(new CustomEvent("storage-remote-update", { detail: { key: k } }));
-            } catch (e) {}
+            try { window.dispatchEvent(new CustomEvent("storage-remote-update", { detail: { key: k } })); } catch (e) {}
           });
-          try {
-            window.dispatchEvent(new CustomEvent("storage-remote-batch", { detail: { keys: changedKeys } }));
-          } catch (e) {}
+          try { window.dispatchEvent(new CustomEvent("storage-remote-batch", { detail: { keys: changedKeys } })); } catch (e) {}
+        }
+        if (!firstSyncComplete && !fromCache) {
+          firstSyncComplete = true;
+          updateSync({ firstSyncComplete: true });
+          console.log("[APP] First Firestore sync complete - writes enabled (dropped " + droppedWritesCount + " pre-sync writes)");
         }
         updateSync({ lastRemoteUpdateTs: Date.now(), online: !fromCache, lastError: null });
       }, function (err) {
         console.warn("Firestore snapshot error:", err && err.message);
         updateSync({ lastError: String(err && err.message || err) });
       });
+
+      // 保険: 10秒経っても初回同期が来なければ強制解禁(オフライン等)
+      setTimeout(function () {
+        if (!firstSyncComplete) {
+          console.warn("[APP] First sync timeout - releasing writes anyway");
+          firstSyncComplete = true;
+          updateSync({ firstSyncComplete: true });
+        }
+      }, 10000);
+
       return db;
     } catch (e) {
       console.warn("Firebase init failed, falling back to local-only mode:", e && e.message);
       updateSync({ lastError: "Firebase init failed: " + (e && e.message) });
+      firstSyncComplete = true;
+      updateSync({ firstSyncComplete: true });
       return null;
     }
   })();
 
-  async function pushToFirestore(key, value, isDelete) {
+  async function doPushToFirestore(key, value, isDelete) {
     updateSync({ pendingWrites: window.__syncState.pendingWrites + 1 });
     try {
       var db = await firebaseReady;
@@ -179,17 +318,49 @@
       } else {
         patch[key] = value;
       }
+      patch.__clientBuild = BUILD_TIME;
+      patch.__clientBuildAt = Date.now();
       await db.collection(COLLECTION).doc(DOC_ID).set(patch, { merge: true });
       updateSync({ lastWriteTs: Date.now(), lastError: null });
     } catch (e) {
-      // offline — the write will queue in Firestore's offline cache and sync later
       updateSync({ lastError: "Write failed: " + (e && e.message) });
     } finally {
       updateSync({ pendingWrites: Math.max(0, window.__syncState.pendingWrites - 1) });
     }
   }
 
-  // 強制再同期: Firestore から shared/state ドキュメントを丸ごと取得してキャッシュを置換する
+  async function pushToFirestore(key, value, isDelete) {
+    if (window.__syncState.versionCheckPassed === false) {
+      console.warn("[APP] Write BLOCKED - old HTML version:", key);
+      return;
+    }
+    if (!isDelete) {
+      var dec = detectLargeDecrease(key, value);
+      if (dec) {
+        var ok = window.confirm(
+          "⚠ 大幅なデータ減少を検出しました\n\n" +
+          "項目: " + key + "\n" +
+          "変更前: " + dec.oldCount + "件\n" +
+          "変更後: " + dec.newCount + "件\n\n" +
+          "本当にこの変更を保存しますか?\n" +
+          "キャンセルすると今の値は保存されません(事故防止)。"
+        );
+        if (!ok) {
+          console.warn("[APP] Write rejected by user:", key, dec);
+          return;
+        }
+      }
+    }
+    if (!firstSyncComplete) {
+      // 初回同期前の書き込みは古いローカルに基づく可能性が高いので捨てる
+      // (これが Mac 事故の防止策。ユーザーが本当に操作した場合は同期後に再度 set() が走る)
+      droppedWritesCount++;
+      console.warn("[APP] Write DROPPED - pre-sync write may be based on stale local:", key);
+      return;
+    }
+    return doPushToFirestore(key, value, isDelete);
+  }
+
   async function forceResync() {
     try {
       var db = await firebaseReady;
@@ -202,22 +373,17 @@
       }
       var data = snap.data() || {};
       var changedKeys = [];
-      // 新しい値をキャッシュに取り込み
       Object.keys(data).forEach(function (k) {
+        if (k === "__clientBuild" || k === "__clientBuildAt") return;
         if (JSON.stringify(data[k]) !== JSON.stringify(cache[k])) {
           cache[k] = data[k];
           changedKeys.push(k);
         }
       });
-      // リモート側で消えているキーをキャッシュからも削除
       Object.keys(cache).forEach(function (k) {
-        if (!(k in data)) {
-          delete cache[k];
-          changedKeys.push(k);
-        }
+        if (!(k in data)) { delete cache[k]; changedKeys.push(k); }
       });
       writeLocal(cache);
-      // 全キーに対して remote-update を発火して React に反映させる
       changedKeys.forEach(function (k) {
         try { window.dispatchEvent(new CustomEvent("storage-remote-update", { detail: { key: k } })); } catch (e) {}
       });
@@ -237,7 +403,6 @@
     set: async function (key, value) {
       cache[key] = value;
       writeLocal(cache);
-      // Fire and forget - don't block UI on network
       pushToFirestore(key, value, false);
       return { key: key, value: value, shared: true };
     },
@@ -248,13 +413,14 @@
       return { key: key, deleted: true, shared: true };
     },
     forceResync: forceResync,
+    getBuildTime: function () { return BUILD_TIME; },
   };
 
-  // Expose a readiness promise for the app
   window.__storageReady = firebaseReady;
 })();
 </script>
-<script type="text/babel" data-presets="react,env">
+<!-- APP_START -->
+<script id="__app_jsx" type="text/plain">
 const { useState, useEffect, useMemo, useCallback } = React;
 
 function makeIcon(paths) {
@@ -529,6 +695,55 @@ const MAX_ORIPA = Infinity; // 以前は 8 個制限だったが撤廃
 
 const yen = (n) => `¥${Math.round(Number(n) || 0).toLocaleString("ja-JP")}`;
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+
+// 効果音(Web Audio で合成、ファイル不要)
+let __audioCtx = null;
+function __tone(startT, freq, dur, vol, waveform) {
+  try {
+    const ctx = __audioCtx;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = waveform || "sine";
+    osc.frequency.setValueAtTime(freq, startT);
+    gain.gain.setValueAtTime(0.0001, startT);
+    gain.gain.exponentialRampToValueAtTime(vol, startT + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startT + dur);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(startT);
+    osc.stop(startT + dur + 0.02);
+  } catch (e) {}
+}
+function __ensureAudio() {
+  try {
+    if (!__audioCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return false;
+      __audioCtx = new AC();
+    }
+    if (__audioCtx.state === "suspended") { try { __audioCtx.resume(); } catch (e) {} }
+    return true;
+  } catch (e) { return false; }
+}
+
+// 1口購入成功時:軽い2音 "ピロン"
+function playDrawSound() {
+  if (!__ensureAudio()) return;
+  const now = __audioCtx.currentTime;
+  __tone(now, 880, 0.08, 0.25);
+  __tone(now + 0.07, 1320, 0.14, 0.25);
+}
+
+// あたり当選時:お祝い3音 "ピロリ〜ン"(C-E-G ド・ミ・ソ 上昇)
+function playWinSound() {
+  if (!__ensureAudio()) return;
+  const now = __audioCtx.currentTime;
+  // ド(C5=523) → ミ(E5=659) → ソ(G5=784) → 高いド(C6=1047)
+  __tone(now,        523, 0.12, 0.28, "triangle");
+  __tone(now + 0.11, 659, 0.12, 0.28, "triangle");
+  __tone(now + 0.22, 784, 0.12, 0.28, "triangle");
+  __tone(now + 0.33, 1047, 0.30, 0.32, "triangle");
+}
 
 // 予測変換用の文字正規化: 大文字→小文字、全角→半角、ひらがな→カタカナ、空白と記号削除
 function normalizeForSearch(s) {
@@ -2517,7 +2732,12 @@ function OripaCalculator() {
       awardLastOne = true;
     }
     appendLog(oripa.id, entries);
-    if (awardLastOne) fireStamp("lastone");
+    playDrawSound(); // 1口追加成功の音
+    if (awardLastOne) {
+      // ラストワン獲得時は購入音の後にお祝い音(少しずらして再生)
+      setTimeout(playWinSound, 250);
+      fireStamp("lastone");
+    }
   };
   const recordSessionWin = (session, tier) => {
     const oripa = oripaList.find((o) => o.id === session.oripaId);
@@ -2527,6 +2747,7 @@ function OripaCalculator() {
     appendLog(session.oripaId, [
       { id: uid(), type: "win", ts: Date.now(), name: tier.name, amount: amount, tierId: tier.id, sessionId: session.id },
     ]);
+    playWinSound(); // あたり当選の音
     fireStamp("win");
   };
   const setSessionHazureNotRedeemed = (session, count) => {
@@ -10066,10 +10287,58 @@ function AttendancePdfButton({ staff, timePunches }) {
 }
 
 
-// ---------- mount ----------
-const __root = ReactDOM.createRoot(document.getElementById("root"));
-__root.render(<OripaCalculator />);
+// Mount the app
+try {
+  const __container = document.getElementById("root");
+  const __root = ReactDOM.createRoot(__container);
+  __root.render(React.createElement(OripaCalculator));
+} catch (e) {
+  console.error("[APP mount]", e);
+  document.getElementById("root").innerHTML = "<div style=\"color:#f66;padding:20px;font-family:monospace;white-space:pre-wrap\">マウント失敗: " + (e && (e.message + (e.stack || ""))) + "</div>";
+}
 
 </script>
+<script>
+  (function () {
+    function run() {
+      try {
+        var el = document.getElementById("__app_jsx");
+        if (!el) throw new Error("__app_jsx element missing");
+        var src = el.textContent;
+        var out = Babel.transform(src, {
+          presets: ["env"],
+          plugins: [["transform-react-jsx", { pragma: "React.createElement", pragmaFrag: "React.Fragment" }]],
+        });
+        var fn = new Function("React", "ReactDOM", out.code);
+        fn(window.React, window.ReactDOM);
+      } catch (e) {
+        var root = document.getElementById("root");
+        if (root) {
+          root.innerHTML =
+            '<div style="padding:20px;color:#f66;font-family:monospace;white-space:pre-wrap;font-size:11px">' +
+            'アプリの起動に失敗しました:\n\n' +
+            (e && (e.message + '\n\n' + (e.stack || ''))) +
+            '</div>';
+        }
+        console.error("[APP BOOT FAIL]", e);
+      }
+    }
+    if (window.Babel && window.React && window.ReactDOM) {
+      run();
+    } else {
+      var tries = 0;
+      var iv = setInterval(function () {
+        tries++;
+        if (window.Babel && window.React && window.ReactDOM) { clearInterval(iv); run(); }
+        else if (tries > 100) {
+          clearInterval(iv);
+          var root = document.getElementById("root");
+          if (root) root.innerHTML = '<div style="padding:20px;color:#f66;font-family:monospace">ライブラリ(React/Babel)の読み込みがタイムアウトしました。<br>ネット接続を確認してページをリロードしてください。</div>';
+        }
+      }, 100);
+    }
+  })();
+</script>
+<!-- APP_END -->
 </body>
 </html>
