@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<!-- BUILD: 2026-11-10T17:59:51+09:00 -->
+<!-- BUILD: 2026-11-10T14:32:08+09:00 -->
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>トレぴ店舗管理システム</title>
@@ -45,7 +45,7 @@
   // ============================================================
   // BUILD_TIME — 新しい HTML をビルドするたび書き換わる
   // ============================================================
-  var BUILD_TIME = "2026-11-10T17:59:51+09:00";
+  var BUILD_TIME = "2026-11-10T14:32:08+09:00";
   window.__APP_BUILD_TIME = BUILD_TIME;
 
   // ============================================================
@@ -88,83 +88,9 @@
   };
 
   var LS_PREFIX = "oripa_app::";
+  var COLLECTION = "shared";
+  var DOC_ID = "state";
   var VERSION_DOC_ID = "version";
-
-  // ============================================================
-  // 多店舗(フランチャイズ)対応: ログイン状態から現在のストアを決める
-  // ・ 店舗ログイン: localStorage(1週間有効)
-  // ・ 本部ログイン: sessionStorage(タブを閉じるまで)
-  // ・ Firestore の格納先は stores/{storeId}
-  // ・ ストア未確定(未ログイン / HQ 専用) の場合は per-store の購読を行わない
-  // ============================================================
-  var AUTH_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-  function getActiveAuth() {
-    // 優先順位: ① HQ が店舗を閲覧中(sessionStorage, 一時)
-    try {
-      var hqView = window.sessionStorage.getItem("oripa_auth_hq_view");
-      if (hqView) {
-        var hqViewName = window.sessionStorage.getItem("oripa_auth_hq_view_name") || "";
-        return { storeId: hqView, isHq: false, name: hqViewName, isHqView: true };
-      }
-    } catch (e) {}
-    // ② HQ モード(sessionStorage, タブ生存中のみ)
-    try {
-      var hq = window.sessionStorage.getItem("oripa_auth_hq");
-      if (hq === "1") return { storeId: "000", isHq: true };
-    } catch (e) {}
-    // ③ 通常店舗ログイン(localStorage, 1週間)
-    try {
-      var raw = window.localStorage.getItem("oripa_auth");
-      if (!raw) return null;
-      var p = JSON.parse(raw);
-      if (p && p.storeId && typeof p.ts === "number" && (Date.now() - p.ts) < AUTH_WEEK_MS) {
-        return { storeId: String(p.storeId), isHq: false, name: p.name || "" };
-      }
-      try { window.localStorage.removeItem("oripa_auth"); } catch (e) {}
-    } catch (e) {}
-    return null;
-  }
-  var __auth = getActiveAuth();
-  var COLLECTION = "stores";
-  var DOC_ID = (__auth && !__auth.isHq) ? __auth.storeId : null; // HQ or not-logged-in → no per-store sub
-
-  // 認証ヘルパーを window.storageAuth として公開(React 側から使う)
-  window.storageAuth = {
-    current: function () { return getActiveAuth(); },
-    loginStore: function (storeId, name) {
-      try {
-        window.localStorage.setItem("oripa_auth", JSON.stringify({
-          storeId: String(storeId), name: name || "", ts: Date.now(),
-        }));
-        try { window.sessionStorage.removeItem("oripa_auth_hq"); } catch (e) {}
-        try { window.sessionStorage.removeItem("oripa_auth_hq_view"); } catch (e) {}
-        try { window.sessionStorage.removeItem("oripa_auth_hq_view_name"); } catch (e) {}
-      } catch (e) {}
-    },
-    loginHq: function () {
-      try { window.sessionStorage.setItem("oripa_auth_hq", "1"); } catch (e) {}
-      try { window.sessionStorage.removeItem("oripa_auth_hq_view"); } catch (e) {}
-      try { window.sessionStorage.removeItem("oripa_auth_hq_view_name"); } catch (e) {}
-    },
-    // HQ 用: 本部モードを維持しつつ、特定店舗の画面を見る(sessionStorage のみ・タブを閉じたら解除)
-    hqEnterStore: function (storeId, name) {
-      try { window.sessionStorage.setItem("oripa_auth_hq_view", String(storeId)); } catch (e) {}
-      try { window.sessionStorage.setItem("oripa_auth_hq_view_name", name || ""); } catch (e) {}
-      try { window.sessionStorage.removeItem("oripa_auth_hq"); } catch (e) {} // 一時的に HQ モード解除(store モードとして動く)
-    },
-    // HQ 閲覧中から本部ダッシュボードに戻る
-    hqReturnToDashboard: function () {
-      try { window.sessionStorage.removeItem("oripa_auth_hq_view"); } catch (e) {}
-      try { window.sessionStorage.removeItem("oripa_auth_hq_view_name"); } catch (e) {}
-      try { window.sessionStorage.setItem("oripa_auth_hq", "1"); } catch (e) {}
-    },
-    logout: function () {
-      try { window.localStorage.removeItem("oripa_auth"); } catch (e) {}
-      try { window.sessionStorage.removeItem("oripa_auth_hq"); } catch (e) {}
-      try { window.sessionStorage.removeItem("oripa_auth_hq_view"); } catch (e) {}
-      try { window.sessionStorage.removeItem("oripa_auth_hq_view_name"); } catch (e) {}
-    },
-  };
 
   var cache = {};
   var lastWrittenJson = {};
@@ -318,13 +244,6 @@
       // バージョンチェック(結果は versionCheckPassed に入る)
       versionCheckAndRegister(db);
 
-      // DOC_ID が無い(未ログイン / HQ)場合は per-store の購読をスキップ
-      if (!DOC_ID) {
-        firstSyncComplete = true;
-        updateSync({ firstSyncComplete: true });
-        return db;
-      }
-
       db.collection(COLLECTION).doc(DOC_ID).onSnapshot({ includeMetadataChanges: true }, function (snap) {
         if (!snap.exists) {
           if (!firstSyncComplete) {
@@ -389,7 +308,6 @@
   })();
 
   async function doPushToFirestore(key, value, isDelete) {
-    if (!DOC_ID) return; // 未ログイン / HQ — per-store 書き込み無効
     updateSync({ pendingWrites: window.__syncState.pendingWrites + 1 });
     try {
       var db = await firebaseReady;
@@ -496,88 +414,6 @@
     },
     forceResync: forceResync,
     getBuildTime: function () { return BUILD_TIME; },
-
-    // ---- 多店舗(HQ)系ヘルパー ----
-    getRegistry: async function () {
-      var db = await firebaseReady;
-      if (!db) return null;
-      try {
-        var snap = await db.collection("_hq").doc("registry").get({ source: "server" });
-        if (!snap.exists) {
-          // 初回起動 → デフォルト構成を書き込む
-          var defaults = {
-            hq: { password: "0718" },
-            stores: {
-              "001": { name: "トレぴ日本橋本店", password: "9999", createdAt: Date.now() },
-              "002": { name: "トレぴ2号店", password: "002", createdAt: Date.now() },
-            },
-          };
-          try {
-            await db.collection("_hq").doc("registry").set({
-              ...defaults,
-              __clientBuild: BUILD_TIME,
-              __clientBuildAt: Date.now(),
-            }, { merge: false });
-          } catch (e) {}
-          return defaults;
-        }
-        var d = snap.data() || {};
-        return { hq: d.hq || { password: "0718" }, stores: d.stores || {} };
-      } catch (e) {
-        console.warn("[REGISTRY] fetch failed:", e && e.message);
-        return null;
-      }
-    },
-    saveRegistry: async function (registry) {
-      var db = await firebaseReady;
-      if (!db) return false;
-      try {
-        await db.collection("_hq").doc("registry").set({
-          hq: registry.hq || { password: "0718" },
-          stores: registry.stores || {},
-          __clientBuild: BUILD_TIME,
-          __clientBuildAt: Date.now(),
-        }, { merge: false });
-        return true;
-      } catch (e) {
-        console.warn("[REGISTRY] save failed:", e && e.message);
-        return false;
-      }
-    },
-    // HQ 用: 任意店舗のドキュメント全体を取得
-    fetchStoreData: async function (storeId) {
-      var db = await firebaseReady;
-      if (!db) return null;
-      try {
-        var snap = await db.collection("stores").doc(String(storeId)).get({ source: "server" });
-        return snap.exists ? (snap.data() || {}) : {};
-      } catch (e) {
-        console.warn("[FETCH STORE] failed:", e && e.message);
-        return null;
-      }
-    },
-    // HQ 用: 任意店舗の特定キーに書き込み(編集)
-    writeToStore: async function (storeId, key, value, isDelete) {
-      var db = await firebaseReady;
-      if (!db) return false;
-      try {
-        var patch = {};
-        if (isDelete) {
-          patch[key] = window.firebase.firestore.FieldValue.delete();
-        } else {
-          patch[key] = value;
-        }
-        patch.__clientBuild = BUILD_TIME;
-        patch.__clientBuildAt = Date.now();
-        await db.collection("stores").doc(String(storeId)).set(patch, { merge: true });
-        return true;
-      } catch (e) {
-        console.warn("[WRITE STORE] failed:", e && e.message);
-        return false;
-      }
-    },
-    getActiveStoreId: function () { return DOC_ID; },
-    isHqMode: function () { return !!(__auth && __auth.isHq); },
   };
 
   window.__storageReady = firebaseReady;
@@ -585,7 +421,7 @@
 </script>
 <!-- APP_START -->
 <script id="__app_jsx" type="text/plain">
-const { useState, useEffect, useMemo, useCallback, useRef } = React;
+const { useState, useEffect, useMemo, useCallback } = React;
 
 function makeIcon(paths) {
   return function Icon({ size = 16, color = "currentColor", style, className, strokeWidth = 2 }) {
@@ -2657,43 +2493,6 @@ function OripaCalculator() {
   const saveStaff = (list) => { setStaff(list); window.storage.set("oripa:staff", JSON.stringify(list), true).catch(() => {}); };
   const saveShiftRequests = (list) => { setShiftRequests(list); window.storage.set("oripa:shiftRequests", JSON.stringify(list), true).catch(() => {}); };
   const saveConfirmedShifts = (list) => { setConfirmedShifts(list); window.storage.set("oripa:confirmedShifts", JSON.stringify(list), true).catch(() => {}); };
-
-  // 【マイグレーション】: 既存の shift 希望提出を全て確定シフトに自動反映する(一度だけ)。
-  // 自動反映機能が追加される前の旧データを救済するため。
-  const shiftMigratedRef = useRef(false);
-  useEffect(() => {
-    if (shiftMigratedRef.current) return;
-    if (shiftRequests.length === 0) return;
-    shiftMigratedRef.current = true;
-    let next = [...confirmedShifts];
-    let changed = false;
-    for (const req of shiftRequests) {
-      const period = req.periodStart;
-      const existing = next.find((c) => c.periodStart === period);
-      const existingEntries = existing ? existing.entries : [];
-      const missing = (req.entries || [])
-        .filter((e) => e && (e.start || e.end))
-        .filter((e) => !existingEntries.some((ce) => ce.staffId === req.staffId && ce.date === e.date))
-        .map((e) => ({
-          staffId: req.staffId,
-          staffName: req.staffName,
-          date: e.date,
-          start: e.start || "",
-          end: e.end || "",
-          note: e.note || "",
-        }));
-      if (missing.length === 0) continue;
-      changed = true;
-      if (existing) {
-        next = next.map((c) => c.periodStart === period
-          ? { ...c, entries: [...c.entries, ...missing], publishedAt: Date.now() }
-          : c);
-      } else {
-        next = [...next, { id: uid(), periodStart: period, entries: missing, publishedAt: Date.now() }];
-      }
-    }
-    if (changed) saveConfirmedShifts(next);
-  }, [shiftRequests, confirmedShifts]);
   const saveTimePunches = (list) => { setTimePunches(list); window.storage.set("oripa:timePunches", JSON.stringify(list), true).catch(() => {}); };
   const saveStoreGeo = (obj) => { setStoreGeo(obj); window.storage.set("oripa:storeGeo", JSON.stringify(obj), true).catch(() => {}); };
 
@@ -3010,44 +2809,10 @@ function OripaCalculator() {
           <Ticket size={22} color={C.gold} />
           <div>
             <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 18, letterSpacing: 0.5 }}>トレぴ店舗管理システム</div>
-            <div style={{ fontSize: 10, color: C.muted, letterSpacing: 2 }}>
-              TOREPI STORE OS
-              {window.storage && window.storage.getActiveStoreId && window.storage.getActiveStoreId() && (
-                <span style={{ marginLeft: 8, color: C.gold, letterSpacing: 1 }}>
-                  店 {window.storage.getActiveStoreId()}
-                  {(() => { try { var a = window.storageAuth && window.storageAuth.current(); return a && a.name ? ": " + a.name : ""; } catch (e) { return ""; } })()}
-                </span>
-              )}
-            </div>
+            <div style={{ fontSize: 10, color: C.muted, letterSpacing: 2 }}>TOREPI STORE OS</div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <SyncStatus />
-          {(() => {
-            var a = (typeof window !== "undefined" && window.storageAuth) ? window.storageAuth.current() : null;
-            if (a && a.isHqView) {
-              return (
-                <button
-                  onClick={() => { try { window.storageAuth.hqReturnToDashboard(); } catch (e) {} window.location.reload(); }}
-                  title="本部ダッシュボードに戻る"
-                  style={{ background: C.gold, border: "none", color: C.ink, borderRadius: 6, padding: "4px 10px", fontSize: 10, fontWeight: 700, cursor: "pointer" }}
-                >HQに戻る</button>
-              );
-            }
-            return (
-              <button
-                onClick={() => {
-                  if (confirm("ログアウトしますか?")) {
-                    try { window.storageAuth.logout(); } catch (e) {}
-                    window.location.reload();
-                  }
-                }}
-                title="ログアウト"
-                style={{ background: "transparent", border: `1px solid ${C.line}`, color: C.muted, borderRadius: 6, padding: "4px 8px", fontSize: 10, cursor: "pointer" }}
-              >ログアウト</button>
-            );
-          })()}
-        </div>
+        <SyncStatus />
       </div>
 
       <div className="flex-1 overflow-y-auto px-5 pb-28 pt-4 max-w-md w-full mx-auto">
@@ -7700,10 +7465,10 @@ function BuybackPublic({ items }) {
 // ============================================================
 // STORE: SHIFT & TIMECLOCK MANAGE
 // ============================================================
-function ShiftManage({ staff, addStaff, updateStaff, deleteStaff, shiftRequests, deleteShiftRequest, confirmedShifts, publishConfirmedShift, updateConfirmedShift, timePunches, managerPunch, deletePunch, storeGeo, saveStoreGeo, hideStaffCrud }) {
+function ShiftManage({ staff, addStaff, updateStaff, deleteStaff, shiftRequests, deleteShiftRequest, confirmedShifts, publishConfirmedShift, timePunches, managerPunch, deletePunch, storeGeo, saveStoreGeo, hideStaffCrud }) {
   const [tab, setTab] = useState("requests");
   const tabs = [
-    ["requests", "希望/調整"],
+    ["requests", "希望"],
     ["confirmed", "確定"],
     ["punches", "打刻"],
     ...(hideStaffCrud ? [] : [["staff", "スタッフ"]]),
@@ -7723,7 +7488,7 @@ function ShiftManage({ staff, addStaff, updateStaff, deleteStaff, shiftRequests,
           </button>
         ))}
       </div>
-      {tab === "requests" && <ShiftRequestList shiftRequests={shiftRequests} deleteShiftRequest={deleteShiftRequest} publishConfirmedShift={publishConfirmedShift} updateConfirmedShift={updateConfirmedShift} staff={staff} confirmedShifts={confirmedShifts} />}
+      {tab === "requests" && <ShiftRequestList shiftRequests={shiftRequests} deleteShiftRequest={deleteShiftRequest} publishConfirmedShift={publishConfirmedShift} staff={staff} confirmedShifts={confirmedShifts} />}
       {tab === "confirmed" && <ConfirmedShiftList confirmedShifts={confirmedShifts} publishConfirmedShift={publishConfirmedShift} staff={staff} />}
       {tab === "punches" && <PunchLog timePunches={timePunches} staff={staff} managerPunch={managerPunch} deletePunch={deletePunch} />}
       {tab === "staff" && <StaffManage staff={staff} addStaff={addStaff} updateStaff={updateStaff} deleteStaff={deleteStaff} />}
@@ -9106,7 +8871,6 @@ function StoreShiftAll({ staff, addStaff, updateStaff, deleteStaff, shiftRequest
           deleteShiftRequest={deleteShiftRequest}
           confirmedShifts={confirmedShifts}
           publishConfirmedShift={publishConfirmedShift}
-          updateConfirmedShift={updateConfirmedShift}
           timePunches={timePunches}
           managerPunch={managerPunch}
           deletePunch={deletePunch}
@@ -9879,7 +9643,6 @@ function AdminShiftZone({ staff, addStaff, updateStaff, deleteStaff, shiftReques
           shiftRequests={shiftRequests}
           deleteShiftRequest={deleteShiftRequest}
           publishConfirmedShift={publishConfirmedShift}
-          updateConfirmedShift={updateConfirmedShift}
           staff={staff}
           confirmedShifts={confirmedShifts}
         />
@@ -10523,289 +10286,12 @@ function AttendancePdfButton({ staff, timePunches }) {
   );
 }
 
-// ============================================================
-// LOGIN & HQ (franchise multi-store)
-// ============================================================
-function AppRouter() {
-  // 認証状態を React state として保持
-  const [auth, setAuth] = useState(() => (window.storageAuth ? window.storageAuth.current() : null));
 
-  if (!auth) {
-    // 未ログイン
-    return <LoginScreen onLogin={(a) => { setAuth(a); }} />;
-  }
-
-  if (auth.isHq) {
-    return <HqDashboard
-      onLogout={() => { window.storageAuth.logout(); window.location.reload(); }}
-      onEnterStore={(id, name) => {
-        window.storageAuth.hqEnterStore(id, name);
-        window.location.reload();
-      }}
-    />;
-  }
-
-  // 通常の店舗モード(HQ閲覧中もこっちに来る)
-  return <OripaCalculator __storeAuth={auth} />;
-}
-
-function LoginScreen({ onLogin }) {
-  const [storeId, setStoreId] = useState("");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
-  const submit = async () => {
-    setError("");
-    if (!storeId || !password) { setError("店舗番号とパスワードを入力してください"); return; }
-    setBusy(true);
-    try {
-      const registry = await window.storage.getRegistry();
-      if (!registry) { setError("サーバーに接続できません。再試行してください"); setBusy(false); return; }
-      const sid = storeId.trim();
-      const pw = password.trim();
-      // 本部ログイン
-      if (sid === "000") {
-        if (registry.hq && registry.hq.password === pw) {
-          window.storageAuth.loginHq();
-          onLogin({ storeId: "000", isHq: true });
-          setBusy(false);
-          return;
-        }
-        setError("本部パスワードが違います"); setBusy(false); return;
-      }
-      // 店舗ログイン
-      const store = registry.stores && registry.stores[sid];
-      if (!store) { setError("店舗番号 \"" + sid + "\" は登録されていません"); setBusy(false); return; }
-      if (store.password !== pw) { setError("パスワードが違います"); setBusy(false); return; }
-      window.storageAuth.loginStore(sid, store.name);
-      // ストア切り替え後は shim を再初期化する必要があるので reload
-      window.location.reload();
-    } catch (e) {
-      setError("エラー: " + (e && e.message));
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div style={{ minHeight: "100vh", background: "#12151C", color: "#E8E9ED", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, fontFamily: "system-ui,-apple-system,sans-serif" }}>
-      <div style={{ width: "100%", maxWidth: 360 }}>
-        <div style={{ textAlign: "center", marginBottom: 32 }}>
-          <div style={{ fontSize: 24, fontWeight: 700, color: "#E8B94B", marginBottom: 4 }}>トレぴ 店舗管理</div>
-          <div style={{ fontSize: 12, color: "#7B8296" }}>ストアログイン</div>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 14, background: "#1A1E26", padding: 24, borderRadius: 16, border: "1px solid #2B313D" }}>
-          <div>
-            <label style={{ fontSize: 12, color: "#7B8296", display: "block", marginBottom: 6 }}>店舗番号</label>
-            <input
-              value={storeId}
-              onChange={(e) => setStoreId(e.target.value)}
-              placeholder="001"
-              inputMode="numeric"
-              autoComplete="off"
-              style={{ width: "100%", background: "#12151C", border: "1px solid #2B313D", borderRadius: 8, padding: "10px 12px", color: "#E8E9ED", fontSize: 16, fontFamily: "ui-monospace,monospace" }}
-            />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: "#7B8296", display: "block", marginBottom: 6 }}>パスワード</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
-              placeholder="••••"
-              autoComplete="off"
-              style={{ width: "100%", background: "#12151C", border: "1px solid #2B313D", borderRadius: 8, padding: "10px 12px", color: "#E8E9ED", fontSize: 16, fontFamily: "ui-monospace,monospace" }}
-            />
-          </div>
-          {error && <div style={{ fontSize: 12, color: "#E2694F", padding: "6px 0" }}>{error}</div>}
-          <button
-            onClick={submit}
-            disabled={busy}
-            style={{ background: "#E8B94B", color: "#12151C", border: "none", borderRadius: 10, padding: "12px 0", fontSize: 15, fontWeight: 700, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}
-          >
-            {busy ? "確認中..." : "ログイン"}
-          </button>
-          <div style={{ fontSize: 10, color: "#7B8296", lineHeight: 1.6, paddingTop: 6, borderTop: "1px solid #2B313D" }}>
-            ・ 店舗ログインは1週間保持されます<br />
-            ・ 本部ログイン(000)はタブを閉じるまでの有効です<br />
-            ・ 初期店舗: 001=日本橋本店(9999) / 002=2号店(002)<br />
-            ・ 本部番号: 000(パスワードは個別)
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function HqDashboard({ onLogout, onEnterStore }) {
-  const [registry, setRegistry] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [newStoreId, setNewStoreId] = useState("");
-  const [newStoreName, setNewStoreName] = useState("");
-  const [newStorePw, setNewStorePw] = useState("");
-  const [editing, setEditing] = useState(null); // storeId being edited
-
-  useEffect(() => {
-    (async () => {
-      const r = await window.storage.getRegistry();
-      setRegistry(r);
-      setLoading(false);
-    })();
-  }, []);
-
-  const save = async (next) => {
-    const ok = await window.storage.saveRegistry(next);
-    if (ok) setRegistry(next);
-    else alert("保存に失敗しました");
-  };
-
-  const addStore = async () => {
-    const sid = newStoreId.trim();
-    if (!sid || !newStoreName.trim() || !newStorePw.trim()) { alert("全項目入力してください"); return; }
-    if (sid === "000") { alert("000は本部番号です"); return; }
-    if (registry.stores[sid]) { alert("その店舗番号は既に存在します"); return; }
-    const next = { ...registry, stores: { ...registry.stores, [sid]: { name: newStoreName.trim(), password: newStorePw.trim(), createdAt: Date.now() } } };
-    await save(next);
-    setNewStoreId(""); setNewStoreName(""); setNewStorePw("");
-  };
-
-  const removeStore = async (sid) => {
-    if (!confirm("店舗 \"" + sid + "\" (" + registry.stores[sid].name + ") を削除しますか?\nこの店舗のデータは Firestore に残ります(別途要手動削除)。")) return;
-    const next = { ...registry, stores: { ...registry.stores } };
-    delete next.stores[sid];
-    await save(next);
-  };
-
-  const updateStore = async (sid, patch) => {
-    const next = { ...registry, stores: { ...registry.stores, [sid]: { ...registry.stores[sid], ...patch } } };
-    await save(next);
-    setEditing(null);
-  };
-
-  const changeHqPassword = async () => {
-    const pw = prompt("新しい本部パスワード:");
-    if (!pw || pw.length < 3) { alert("3文字以上で入力してください"); return; }
-    const next = { ...registry, hq: { ...registry.hq, password: pw } };
-    await save(next);
-    alert("本部パスワードを変更しました。次回ログインから有効です。");
-  };
-
-  if (loading || !registry) {
-    return (
-      <div style={{ minHeight: "100vh", background: "#12151C", color: "#E8E9ED", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "system-ui" }}>
-        <div>読み込み中...</div>
-      </div>
-    );
-  }
-
-  const storeEntries = Object.entries(registry.stores || {}).sort((a, b) => a[0].localeCompare(b[0]));
-
-  return (
-    <div style={{ minHeight: "100vh", background: "#12151C", color: "#E8E9ED", padding: "24px 16px", fontFamily: "system-ui,-apple-system,sans-serif" }}>
-      <div style={{ maxWidth: 720, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#E8B94B" }}>本部ダッシュボード</div>
-            <div style={{ fontSize: 11, color: "#7B8296" }}>HQ / 店舗番号 000 / {storeEntries.length}店舗</div>
-          </div>
-          <button
-            onClick={onLogout}
-            style={{ background: "#2B313D", color: "#E8E9ED", border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}
-          >ログアウト</button>
-        </div>
-
-        {/* 店舗一覧 */}
-        <div style={{ background: "#1A1E26", borderRadius: 12, border: "1px solid #2B313D", padding: 16 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>店舗一覧</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {storeEntries.map(([sid, s]) => (
-              <div key={sid} style={{ background: "#12151C", borderRadius: 8, padding: 12, border: "1px solid #2B313D", display: "flex", flexDirection: "column", gap: 8 }}>
-                {editing === sid ? (
-                  <EditStoreRow
-                    sid={sid}
-                    store={s}
-                    onCancel={() => setEditing(null)}
-                    onSave={(patch) => updateStore(sid, patch)}
-                  />
-                ) : (
-                  <>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <div style={{ fontFamily: "ui-monospace,monospace", fontSize: 14, fontWeight: 700, color: "#E8B94B", minWidth: 40 }}>{sid}</div>
-                      <div style={{ flex: 1, fontSize: 14 }}>{s.name}</div>
-                    </div>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <button
-                        onClick={() => onEnterStore(sid)}
-                        style={{ background: "#E8B94B", color: "#12151C", border: "none", borderRadius: 6, padding: "6px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
-                      >この店舗に入る</button>
-                      <button
-                        onClick={() => setEditing(sid)}
-                        style={{ background: "#2B313D", color: "#E8E9ED", border: "none", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer" }}
-                      >編集</button>
-                      <button
-                        onClick={() => removeStore(sid)}
-                        style={{ background: "transparent", color: "#E2694F", border: "1px solid #E2694F", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer" }}
-                      >削除</button>
-                    </div>
-                  </>
-                )}
-              </div>
-            ))}
-            {storeEntries.length === 0 && (
-              <div style={{ fontSize: 12, color: "#7B8296", textAlign: "center", padding: 20 }}>店舗が登録されていません</div>
-            )}
-          </div>
-        </div>
-
-        {/* 新規追加 */}
-        <div style={{ background: "#1A1E26", borderRadius: 12, border: "1px solid #2B313D", padding: 16 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>新規店舗を追加</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <input value={newStoreId} onChange={(e) => setNewStoreId(e.target.value)} placeholder="店舗番号 (例: 003)" style={{ background: "#12151C", border: "1px solid #2B313D", borderRadius: 6, padding: "10px 12px", color: "#E8E9ED", fontSize: 14 }} />
-            <input value={newStoreName} onChange={(e) => setNewStoreName(e.target.value)} placeholder="店舗名 (例: トレぴ3号店)" style={{ background: "#12151C", border: "1px solid #2B313D", borderRadius: 6, padding: "10px 12px", color: "#E8E9ED", fontSize: 14 }} />
-            <input value={newStorePw} onChange={(e) => setNewStorePw(e.target.value)} placeholder="パスワード" style={{ background: "#12151C", border: "1px solid #2B313D", borderRadius: 6, padding: "10px 12px", color: "#E8E9ED", fontSize: 14 }} />
-            <button onClick={addStore} style={{ background: "#6FCF8F", color: "#12151C", border: "none", borderRadius: 8, padding: "10px 0", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>追加</button>
-          </div>
-        </div>
-
-        {/* 本部設定 */}
-        <div style={{ background: "#1A1E26", borderRadius: 12, border: "1px solid #2B313D", padding: 16 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>本部設定</div>
-          <button onClick={changeHqPassword} style={{ background: "#2B313D", color: "#E8E9ED", border: "none", borderRadius: 6, padding: "10px 14px", fontSize: 12, cursor: "pointer" }}>本部パスワードを変更</button>
-        </div>
-
-        <div style={{ fontSize: 10, color: "#7B8296", textAlign: "center", padding: 20 }}>
-          ⚠ 本部モードでは "この店舗に入る" を押すとその店舗のデータが完全編集可能になります。<br />
-          変更は全端末にリアルタイム反映されます。
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function EditStoreRow({ sid, store, onCancel, onSave }) {
-  const [name, setName] = useState(store.name);
-  const [password, setPassword] = useState(store.password);
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ fontSize: 11, color: "#7B8296" }}>店舗番号 {sid} を編集</div>
-      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="店舗名" style={{ background: "#12151C", border: "1px solid #2B313D", borderRadius: 6, padding: "8px 10px", color: "#E8E9ED", fontSize: 13 }} />
-      <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="パスワード" style={{ background: "#12151C", border: "1px solid #2B313D", borderRadius: 6, padding: "8px 10px", color: "#E8E9ED", fontSize: 13 }} />
-      <div style={{ display: "flex", gap: 6 }}>
-        <button onClick={() => onSave({ name: name.trim(), password: password.trim() })} style={{ flex: 1, background: "#6FCF8F", color: "#12151C", border: "none", borderRadius: 6, padding: "8px 0", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>保存</button>
-        <button onClick={onCancel} style={{ flex: 1, background: "#2B313D", color: "#E8E9ED", border: "none", borderRadius: 6, padding: "8px 0", fontSize: 12, cursor: "pointer" }}>キャンセル</button>
-      </div>
-    </div>
-  );
-}
-
-
-// Mount the app via AppRouter (login → store or HQ)
+// Mount the app
 try {
   const __container = document.getElementById("root");
   const __root = ReactDOM.createRoot(__container);
-  __root.render(React.createElement(AppRouter));
+  __root.render(React.createElement(OripaCalculator));
 } catch (e) {
   console.error("[APP mount]", e);
   document.getElementById("root").innerHTML = "<div style=\"color:#f66;padding:20px;font-family:monospace;white-space:pre-wrap\">マウント失敗: " + (e && (e.message + (e.stack || ""))) + "</div>";
